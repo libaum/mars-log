@@ -23,6 +23,7 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
   final _repo = getIt<JournalRepository>();
   final _player = AudioPlayer();
   bool _playing = false;
+  bool _leaving = false;
 
   @override
   void initState() {
@@ -48,6 +49,17 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
     }
   }
 
+  Future<void> _pickDay(JournalEntry entry) async {
+    final now = DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: entry.day,
+      firstDate: DateTime(2000),
+      lastDate: DateTime(now.year, now.month, now.day),
+    );
+    if (picked != null) await _journal.setDay(entry, picked);
+  }
+
   @override
   Widget build(BuildContext context) {
     return DoubleTapThemeToggle(
@@ -64,10 +76,13 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
                 }
               }
               if (entry == null) {
-                // Deleted elsewhere — leave the screen.
-                WidgetsBinding.instance.addPostFrameCallback((_) {
-                  if (mounted) Navigator.pop(context);
-                });
+                // Deleted (here or elsewhere) — leave the screen exactly once.
+                if (!_leaving) {
+                  _leaving = true;
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    if (mounted) Navigator.pop(context);
+                  });
+                }
                 return const SizedBox.shrink();
               }
               return _content(entry);
@@ -85,7 +100,19 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
     return ListView(
       padding: const EdgeInsets.fromLTRB(32, 24, 32, 48),
       children: [
-        Text(formatLongDate(entry.day), style: TEXT_STYLE_TITLE),
+        // Tap the date to move the entry to another day (backdating).
+        GestureDetector(
+          onTap: () => _pickDay(entry),
+          behavior: HitTestBehavior.opaque,
+          child: Row(
+            children: [
+              Text(formatLongDate(entry.day), style: TEXT_STYLE_TITLE),
+              const SizedBox(width: 10),
+              Icon(Icons.edit_calendar_outlined,
+                  size: 18, color: primary.withValues(alpha: 0.3)),
+            ],
+          ),
+        ),
         const SizedBox(height: 28),
 
         // Audio playback
@@ -248,9 +275,11 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
         ),
         const Spacer(),
         TextButton(
-          onPressed: () async {
-            await _journal.delete(entry);
-            if (mounted) Navigator.pop(context);
+          onPressed: () {
+            if (_leaving) return;
+            _leaving = true;
+            _journal.delete(entry); // fire; the pop below is the only one
+            Navigator.pop(context);
           },
           child: Text('Löschen',
               style: TEXT_STYLE_SETTING.copyWith(color: COLOR_SECONDARY)),

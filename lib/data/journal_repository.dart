@@ -47,8 +47,10 @@ class JournalRepository {
   /// Newest first.
   List<JournalEntry> get entries => List.unmodifiable(_entries);
 
-  void _sort() =>
-      _entries.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+  void _sort() => _entries.sort((a, b) {
+        final byDay = b.day.compareTo(a.day);
+        return byDay != 0 ? byDay : b.createdAt.compareTo(a.createdAt);
+      });
 
   Future<void> _persist() async {
     final json = jsonEncode(_entries.map((e) => e.toJson()).toList());

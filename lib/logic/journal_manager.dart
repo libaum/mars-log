@@ -74,7 +74,18 @@ class JournalManager {
   }
 
   Future<void> delete(JournalEntry entry) async {
-    await _repo.delete(entry);
+    // Remove from the in-memory list synchronously (before awaiting the file
+    // IO) and refresh now, so a Dismissible sees the item gone in the same
+    // frame it dismisses it.
+    final done = _repo.delete(entry);
+    _refresh();
+    await done;
+  }
+
+  /// Moves an entry to a different day (e.g. backdating). Re-sorts the timeline.
+  Future<void> setDay(JournalEntry entry, DateTime day) async {
+    entry.day = DateTime(day.year, day.month, day.day);
+    await _repo.upsert(entry);
     _refresh();
   }
 }

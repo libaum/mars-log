@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# Build, archive and install the RELEASE build of Mars FX.
-#   applicationId: com.catchingclouds.marsfx  (release-signed)
+# Build, archive and install the RELEASE build of Mars Log.
+#   applicationId: com.catchingclouds.marslog
+# The Gemini key is injected from env.json (gitignored) if present.
 # Every build is archived under apk_archive/ so a known-good version can be
 # reinstalled later without rebuilding — handy when a new build regresses.
 #
@@ -46,12 +47,14 @@ case "${1:-build}" in
   build)
     require_device
     echo "==> Building release APK"
-    flutter build apk --release
+    DEFINE=""
+    [ -f env.json ] && DEFINE="--dart-define-from-file=env.json"
+    flutter build apk --release $DEFINE
     mkdir -p "$ARCHIVE_DIR"
     version=$(grep -m1 '^version:' pubspec.yaml | sed 's/version:[[:space:]]*//')
     githash=$(git rev-parse --short HEAD 2>/dev/null || echo nogit)
     stamp=$(date +%Y%m%d-%H%M%S)
-    archived="$ARCHIVE_DIR/mars_${version}_${githash}_${stamp}.apk"
+    archived="$ARCHIVE_DIR/mars_log_${version}_${githash}_${stamp}.apk"
     cp "$APK_OUT" "$archived"
     echo "==> Archived $(basename "$archived")"
     install_apk "$archived"

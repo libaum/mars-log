@@ -20,7 +20,7 @@ const kMoodDimensions = <String>[
 class JournalEntry {
   final String id;
   final DateTime createdAt;
-  final DateTime day;
+  DateTime day;
   final String audioFileName;
 
   EntryStatus status;

@@ -46,3 +46,7 @@ app.*.map.json
 
 # Local API key (never commit)
 /env.json
+
+# Kotlin compiler session cruft
+.kotlin/
+android/.kotlin/
