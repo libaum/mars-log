@@ -44,5 +44,5 @@ app.*.map.json
 /android/app/profile
 /android/app/release
 
-# Local API key / secrets (never commit)
-/lib/secrets.dart
+# Local API key (never commit)
+/env.json

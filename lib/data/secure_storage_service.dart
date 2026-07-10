@@ -1,7 +1,11 @@
 import 'dart:convert';
 import 'package:crypto/crypto.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import 'package:mars_log/secrets.dart';
+
+/// Compile-time fallback key, supplied via
+/// `--dart-define-from-file=env.json` (or `--dart-define=GEMINI_API_KEY=...`).
+/// Empty when not provided, so the Settings key is used instead.
+const _envApiKey = String.fromEnvironment('GEMINI_API_KEY');
 
 /// Encrypted storage for sensitive values: the Gemini API key and the PIN hash.
 class SecureStorageService {
@@ -15,11 +19,11 @@ class SecureStorageService {
           aOptions: AndroidOptions(encryptedSharedPreferences: true),
         );
 
-  /// Prefers a key set in Settings; falls back to the hardcoded one in secrets.dart.
+  /// Prefers a key set in Settings; falls back to the compile-time [_envApiKey].
   Future<String?> getApiKey() async {
     final stored = await _storage.read(key: _keyApiKey);
     if (stored != null && stored.isNotEmpty) return stored;
-    return kGeminiApiKeyFallback.isNotEmpty ? kGeminiApiKeyFallback : null;
+    return _envApiKey.isNotEmpty ? _envApiKey : null;
   }
   Future<void> setApiKey(String key) =>
       _storage.write(key: _keyApiKey, value: key.trim());
