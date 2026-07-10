@@ -1,0 +1,37 @@
+name: mars_log
+description: "Mars Log — voice journal. Talk, and it writes itself."
+publish_to: 'none'
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.12.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+  http: ^1.2.0
+  crypto: ^3.0.5
+  get_it: ^9.0.0
+  shared_preferences: ^2.3.4
+  flutter_secure_storage: ^9.2.2
+  path_provider: ^2.1.4
+  record: ^6.0.0
+  audioplayers: ^6.1.0
+  local_auth: ^2.3.0
+  archive: ^3.6.1
+  file_picker: ^8.1.2
+  share_plus: ^10.1.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.1
+
+flutter:
+  uses-material-design: true
+
+  fonts:
+    - family: Outfit
+      fonts:
+        - asset: assets/fonts/Outfit-VariableFont_wght.ttf

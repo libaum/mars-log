@@ -1,0 +1,35 @@
+import 'package:get_it/get_it.dart';
+import 'package:mars_log/data/export_service.dart';
+import 'package:mars_log/data/gemini_service.dart';
+import 'package:mars_log/data/journal_repository.dart';
+import 'package:mars_log/data/local_storage_service.dart';
+import 'package:mars_log/data/secure_storage_service.dart';
+import 'package:mars_log/logic/journal_manager.dart';
+import 'package:mars_log/logic/lock_manager.dart';
+import 'package:mars_log/logic/recording_manager.dart';
+import 'package:mars_log/logic/settings_manager.dart';
+import 'package:mars_log/theme/theme_manager.dart';
+
+final getIt = GetIt.instance;
+
+Future<void> setupServiceLocator() async {
+  // Async storage first — everything else reads it in its constructor.
+  getIt.registerSingleton<LocalStorageService>(
+    await LocalStorageService.getInstance(),
+  );
+  getIt.registerSingleton<SecureStorageService>(SecureStorageService());
+
+  getIt.registerSingleton<JournalRepository>(
+    await JournalRepository.getInstance(),
+  );
+  getIt.registerSingleton<GeminiService>(GeminiService());
+
+  getIt.registerSingleton<ThemeManager>(ThemeManager());
+  getIt.registerSingleton<SettingsManager>(SettingsManager());
+  getIt.registerSingleton<RecordingManager>(RecordingManager());
+  getIt.registerSingleton<JournalManager>(JournalManager());
+  getIt.registerSingleton<ExportService>(
+    ExportService(getIt<JournalRepository>()),
+  );
+  getIt.registerSingleton<LockManager>(LockManager());
+}
