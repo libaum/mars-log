@@ -50,3 +50,6 @@ app.*.map.json
 # Kotlin compiler session cruft
 .kotlin/
 android/.kotlin/
+
+# Release APK archives (install_release.sh output)
+apk_archive/
