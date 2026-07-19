@@ -53,3 +53,7 @@ android/.kotlin/
 
 # Release APK archives (install_release.sh output)
 apk_archive/
+
+# Local tooling (Claude Code, tokensave)
+.claude/
+.tokensave/
