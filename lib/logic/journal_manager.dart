@@ -15,12 +15,17 @@ class JournalManager {
   final _secure = getIt<SecureStorageService>();
 
   late final ValueNotifier<List<JournalEntry>> entriesNotifier;
+  late final ValueNotifier<List<JournalEntry>> trashNotifier;
 
   JournalManager() {
     entriesNotifier = ValueNotifier(_repo.entries);
+    trashNotifier = ValueNotifier(_repo.deletedEntries);
   }
 
-  void _refresh() => entriesNotifier.value = _repo.entries;
+  void _refresh() {
+    entriesNotifier.value = _repo.entries;
+    trashNotifier.value = _repo.deletedEntries;
+  }
 
   /// Creates a provisional (analyzing) entry immediately, then analyses it.
   Future<void> createFromAudio(RecordingResult rec) async {
@@ -73,13 +78,31 @@ class JournalManager {
     _refresh();
   }
 
+  /// Soft-delete: moves an entry to the trash (recoverable). Marks it deleted
+  /// synchronously and refreshes now, so a Dismissible sees the item gone in
+  /// the same frame it dismisses it.
   Future<void> delete(JournalEntry entry) async {
-    // Remove from the in-memory list synchronously (before awaiting the file
-    // IO) and refresh now, so a Dismissible sees the item gone in the same
-    // frame it dismisses it.
-    final done = _repo.delete(entry);
+    final done = _repo.moveToTrash(entry);
     _refresh();
     await done;
+  }
+
+  /// Brings a trashed entry back into the active timeline.
+  Future<void> restore(JournalEntry entry) async {
+    await _repo.restore(entry);
+    _refresh();
+  }
+
+  /// Permanently removes a single trashed entry (and its audio). Irreversible.
+  Future<void> purge(JournalEntry entry) async {
+    await _repo.purge(entry);
+    _refresh();
+  }
+
+  /// Permanently empties the trash. Irreversible.
+  Future<void> emptyTrash() async {
+    await _repo.emptyTrash();
+    _refresh();
   }
 
   /// Moves an entry to a different day (e.g. backdating). Re-sorts the timeline.

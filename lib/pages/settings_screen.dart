@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:mars_log/data/export_service.dart';
+import 'package:mars_log/domain/journal_entry.dart';
+import 'package:mars_log/logic/journal_manager.dart';
 import 'package:mars_log/logic/settings_manager.dart';
 import 'package:mars_log/logic/lock_manager.dart';
 import 'package:mars_log/pages/about_screen.dart';
+import 'package:mars_log/pages/trash_screen.dart';
 import 'package:mars_log/pages/widgets/double_tap_theme_toggle.dart';
 import 'package:mars_log/services/service_locator.dart';
 import 'package:mars_log/theme/theme_constants.dart';
@@ -18,6 +21,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final _settings = getIt<SettingsManager>();
   final _lock = getIt<LockManager>();
   final _export = getIt<ExportService>();
+  final _journal = getIt<JournalManager>();
 
   Future<void> _editApiKey() async {
     final current = await _settings.getApiKey() ?? '';
@@ -35,11 +39,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Abbrechen'),
+            child: const Text('Cancel'),
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, controller.text),
-            child: const Text('Speichern'),
+            child: const Text('Save'),
           ),
         ],
       ),
@@ -51,16 +55,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
     try {
       await _export.exportAndShare();
     } catch (e) {
-      _snack('Export fehlgeschlagen: $e');
+      _snack('Export failed: $e');
+    }
+  }
+
+  Future<void> _doExportToDisk() async {
+    try {
+      final path = await _export.exportToDisk();
+      if (path != null) _snack('Saved.');
+    } catch (e) {
+      _snack('Save failed: $e');
     }
   }
 
   Future<void> _doImport() async {
     try {
       final count = await _export.importFromPicker();
-      if (count != null) _snack('$count neue Einträge importiert.');
+      if (count != null) _snack('$count new entries imported.');
     } catch (e) {
-      _snack('Import fehlgeschlagen: $e');
+      _snack('Import failed: $e');
     }
   }
 
@@ -70,7 +83,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (pin != null && pin.length >= 4) {
         await _settings.setPin(pin);
       } else if (pin != null) {
-        _snack('PIN braucht mindestens 4 Ziffern.');
+        _snack('PIN needs at least 4 digits.');
       }
     } else {
       await _settings.disablePin();
@@ -82,22 +95,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('PIN festlegen', style: TEXT_STYLE_SETTING),
+        title: const Text('Set PIN', style: TEXT_STYLE_SETTING),
         content: TextField(
           controller: controller,
           autofocus: true,
           obscureText: true,
           keyboardType: TextInputType.number,
-          decoration: const InputDecoration(hintText: 'Mind. 4 Ziffern'),
+          decoration: const InputDecoration(hintText: 'At least 4 digits'),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Abbrechen'),
+            child: const Text('Cancel'),
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, controller.text),
-            child: const Text('Speichern'),
+            child: const Text('Save'),
           ),
         ],
       ),
@@ -106,7 +119,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _toggleBiometric(bool value) async {
     if (value && !await _lock.deviceSupportsBiometrics()) {
-      _snack('Keine Biometrie auf diesem Gerät verfügbar.');
+      _snack('No biometrics available on this device.');
       return;
     }
     await _settings.setBiometricEnabled(value);
@@ -136,22 +149,37 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ValueListenableBuilder<bool>(
                 valueListenable: _settings.hasApiKeyNotifier,
                 builder: (context, hasKey, _) => _valueRow(
-                  'Gemini API-Key',
-                  hasKey ? 'gesetzt' : 'nicht gesetzt',
+                  'Gemini API key',
+                  hasKey ? 'set' : 'not set',
                   _editApiKey,
                 ),
               ),
               _divider(),
-              _actionRow('Export', _doExport),
+              _actionRow('Export (share)', _doExport),
+              _divider(),
+              _actionRow('Export (save to device)', _doExportToDisk),
               _divider(),
               _actionRow('Import', _doImport),
+              _divider(),
+
+              ValueListenableBuilder<List<JournalEntry>>(
+                valueListenable: _journal.trashNotifier,
+                builder: (context, trash, _) => _valueRow(
+                  'Papierkorb',
+                  trash.isEmpty ? '' : '${trash.length}',
+                  () => Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const TrashScreen()),
+                  ),
+                ),
+              ),
               _divider(),
 
               ValueListenableBuilder<bool>(
                 valueListenable: _settings.pinEnabledNotifier,
                 builder: (context, enabled, _) => _toggleRow(
-                  'PIN-Sperre',
-                  'App beim Öffnen mit PIN schützen',
+                  'PIN lock',
+                  'Protect the app with a PIN on open',
                   enabled,
                   _togglePin,
                 ),
@@ -160,8 +188,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ValueListenableBuilder<bool>(
                 valueListenable: _settings.biometricEnabledNotifier,
                 builder: (context, enabled, _) => _toggleRow(
-                  'Biometrie',
-                  'Fingerabdruck / Face Unlock',
+                  'Biometrics',
+                  'Fingerprint / Face Unlock',
                   enabled,
                   _toggleBiometric,
                 ),

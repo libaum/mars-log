@@ -34,6 +34,10 @@ class JournalEntry {
   int? analysisVersion;
   String? errorMessage;
 
+  /// When non-null, the entry lives in the trash (soft-deleted). Audio +
+  /// transcript are kept until it is purged (manually or after retention).
+  DateTime? deletedAt;
+
   JournalEntry({
     required this.id,
     required this.createdAt,
@@ -49,6 +53,7 @@ class JournalEntry {
     this.analysisModel,
     this.analysisVersion,
     this.errorMessage,
+    this.deletedAt,
   }) : tags = tags ?? const [];
 
   Map<String, dynamic> toJson() => {
@@ -66,6 +71,7 @@ class JournalEntry {
         'analysisModel': analysisModel,
         'analysisVersion': analysisVersion,
         'errorMessage': errorMessage,
+        'deletedAt': deletedAt?.toIso8601String(),
       };
 
   factory JournalEntry.fromJson(Map<String, dynamic> json) {
@@ -91,6 +97,9 @@ class JournalEntry {
       analysisModel: json['analysisModel'] as String?,
       analysisVersion: json['analysisVersion'] as int?,
       errorMessage: json['errorMessage'] as String?,
+      deletedAt: json['deletedAt'] == null
+          ? null
+          : DateTime.parse(json['deletedAt'] as String),
     );
   }
 }

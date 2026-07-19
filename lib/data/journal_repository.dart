@@ -11,6 +11,9 @@ class JournalRepository {
   static const _indexFileName = 'entries.json';
   static const _audioDirName = 'audio';
 
+  /// How long trashed entries survive before they are purged automatically.
+  static const trashRetention = Duration(days: 30);
+
   late final Directory _docsDir;
   final List<JournalEntry> _entries = [];
 
@@ -35,6 +38,7 @@ class JournalRepository {
         ..addAll(list.map((e) =>
             JournalEntry.fromJson((e as Map).cast<String, dynamic>())));
       _sort();
+      await _purgeExpired();
     } catch (_) {
       // Corrupt index → start empty rather than crash. Audio files survive.
     }
@@ -44,8 +48,16 @@ class JournalRepository {
   String get audioDirPath => '${_docsDir.path}/$_audioDirName';
   String audioPath(String fileName) => '$audioDirPath/$fileName';
 
-  /// Newest first.
-  List<JournalEntry> get entries => List.unmodifiable(_entries);
+  /// Active (non-trashed) entries, newest first.
+  List<JournalEntry> get entries =>
+      List.unmodifiable(_entries.where((e) => e.deletedAt == null));
+
+  /// Trashed entries, most recently deleted first.
+  List<JournalEntry> get deletedEntries {
+    final list = _entries.where((e) => e.deletedAt != null).toList()
+      ..sort((a, b) => b.deletedAt!.compareTo(a.deletedAt!));
+    return List.unmodifiable(list);
+  }
 
   void _sort() => _entries.sort((a, b) {
         final byDay = b.day.compareTo(a.day);
@@ -68,9 +80,53 @@ class JournalRepository {
     await _persist();
   }
 
-  Future<void> delete(JournalEntry entry) async {
+  /// Soft-delete: move the entry to the trash. Audio is kept for restore.
+  /// Sets [JournalEntry.deletedAt] synchronously (so [entries] hides it in the
+  /// same frame) and returns the persistence future.
+  Future<void> moveToTrash(JournalEntry entry) {
+    entry.deletedAt = DateTime.now();
+    return _persist();
+  }
+
+  /// Bring a trashed entry back into the active timeline.
+  Future<void> restore(JournalEntry entry) async {
+    entry.deletedAt = null;
+    _sort();
+    await _persist();
+  }
+
+  /// Permanently remove one entry (and its audio). Irreversible.
+  Future<void> purge(JournalEntry entry) async {
     _entries.removeWhere((e) => e.id == entry.id);
     await _persist();
+    await _deleteAudio(entry);
+  }
+
+  /// Permanently remove every trashed entry (and its audio). Irreversible.
+  Future<void> emptyTrash() async {
+    final trashed = _entries.where((e) => e.deletedAt != null).toList();
+    _entries.removeWhere((e) => e.deletedAt != null);
+    await _persist();
+    for (final e in trashed) {
+      await _deleteAudio(e);
+    }
+  }
+
+  /// Purge trashed entries older than [trashRetention]. Called on load.
+  Future<void> _purgeExpired() async {
+    final cutoff = DateTime.now().subtract(trashRetention);
+    bool expired(JournalEntry e) =>
+        e.deletedAt != null && e.deletedAt!.isBefore(cutoff);
+    final gone = _entries.where(expired).toList();
+    if (gone.isEmpty) return;
+    _entries.removeWhere(expired);
+    await _persist();
+    for (final e in gone) {
+      await _deleteAudio(e);
+    }
+  }
+
+  Future<void> _deleteAudio(JournalEntry entry) async {
     final audio = File(audioPath(entry.audioFileName));
     if (await audio.exists()) await audio.delete();
   }

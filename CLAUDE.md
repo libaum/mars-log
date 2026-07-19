@@ -30,13 +30,13 @@ Managers expose state via `ValueNotifier`; UI subscribes with `ValueListenableBu
 ### Key Classes
 | Class | Responsibility |
 |---|---|
-| `JournalRepository` | Owns `entries.json` + `audio/` in app documents dir; in-memory list, persisted on every mutation |
+| `JournalRepository` | Owns `entries.json` + `audio/` in app documents dir; in-memory list, persisted on every mutation. Delete is a soft-delete (`deletedAt`); trashed entries are purged on load after `trashRetention` (30 days) |
 | `LocalStorageService` | SharedPreferences: theme + lock flags + analysis version (non-sensitive) |
 | `SecureStorageService` | flutter_secure_storage: Gemini API key + PIN hash (sha256) |
 | `GeminiService` | One multimodal `generateContent` call (audio in, structured JSON out) |
 | `ExportService` | Zip export (`entries.json` + audio) via share sheet; import + merge by id |
 | `RecordingManager` | Microphone lifecycle; records WAV 16 kHz mono; timer |
-| `JournalManager` | Core state: `entriesNotifier`, `createFromAudio`, `reanalyze`, `delete` |
+| `JournalManager` | Core state: `entriesNotifier` + `trashNotifier`, `createFromAudio`, `reanalyze`, `delete` (soft, to trash), `restore`, `purge`, `emptyTrash` |
 | `SettingsManager` | API key + PIN/biometric toggles |
 | `LockManager` | Optional PIN/biometric gate; re-locks on app resume |
 | `ThemeManager` | Light/dark following system (Mars pattern) |
@@ -62,7 +62,7 @@ lib/
 ## Key Interactions
 - **Tap** the circle → start/stop recording (entry then analyzes itself)
 - **Tap** a timeline row → entry detail (playback, transcript, summary, mood, tags, re-analyze, delete)
-- **Swipe left** on a row → delete (no confirmation)
+- **Swipe left** on a row → delete (asks first, then moves to the trash)
 - **Long-press** the header/record area → Settings
 - **Double-tap** anywhere → toggle theme
 

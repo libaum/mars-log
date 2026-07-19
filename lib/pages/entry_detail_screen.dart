@@ -4,6 +4,7 @@ import 'package:mars_log/data/journal_repository.dart';
 import 'package:mars_log/domain/journal_entry.dart';
 import 'package:mars_log/domain/mood.dart';
 import 'package:mars_log/logic/journal_manager.dart';
+import 'package:mars_log/pages/widgets/confirm_dialog.dart';
 import 'package:mars_log/pages/widgets/double_tap_theme_toggle.dart';
 import 'package:mars_log/services/service_locator.dart';
 import 'package:mars_log/theme/theme_constants.dart';
@@ -275,8 +276,15 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
         ),
         const Spacer(),
         TextButton(
-          onPressed: () {
+          onPressed: () async {
             if (_leaving) return;
+            final ok = await showConfirmDialog(
+              context,
+              title: 'In den Papierkorb?',
+              message:
+                  'Du kannst den Eintrag im Papierkorb wiederherstellen.',
+            );
+            if (!ok || _leaving || !mounted) return;
             _leaving = true;
             _journal.delete(entry); // fire; the pop below is the only one
             Navigator.pop(context);
