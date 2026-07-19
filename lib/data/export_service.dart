@@ -14,8 +14,8 @@ class ExportService {
 
   ExportService(this._repository);
 
-  /// Builds a zip and hands it to the OS share sheet.
-  Future<void> exportAndShare() async {
+  /// Builds the backup zip in the temp dir and returns its path.
+  Future<String> _buildZip() async {
     final encoder = ZipFileEncoder();
     final tmp = await getTemporaryDirectory();
     final stamp = DateTime.now().toIso8601String().split('T').first;
@@ -31,23 +31,43 @@ class ExportService {
       await encoder.addDirectory(audioDir, includeDirName: true);
     }
     await encoder.close();
+    return zipPath;
+  }
 
+  /// Builds a zip and hands it to the OS share sheet.
+  Future<void> exportAndShare() async {
+    final zipPath = await _buildZip();
     await Share.shareXFiles(
       [XFile(zipPath)],
       subject: 'Mars Log Export',
     );
   }
 
+  /// Builds a zip and lets the user save it to a folder on the device.
+  /// Returns the saved path, or null if the user cancelled.
+  Future<String?> exportToDisk() async {
+    final zipPath = await _buildZip();
+    final bytes = await File(zipPath).readAsBytes();
+    return FilePicker.platform.saveFile(
+      dialogTitle: 'Save Mars Log Export',
+      fileName: zipPath.split('/').last,
+      bytes: bytes,
+    );
+  }
+
   /// Lets the user pick a zip and merges its entries + audio into the journal.
   /// Returns the number of newly imported entries, or null if cancelled.
   Future<int?> importFromPicker() async {
-    final picked = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['zip'],
-    );
-    if (picked == null || picked.files.single.path == null) return null;
+    // FileType.any (not custom/zip): Android's extension filter greys out
+    // our .zip on many devices. withData ensures we get bytes even for
+    // content URIs (Downloads, Drive) that expose no filesystem path.
+    final picked = await FilePicker.platform.pickFiles(withData: true);
+    if (picked == null) return null;
+    final file = picked.files.single;
 
-    final bytes = await File(picked.files.single.path!).readAsBytes();
+    final bytes = file.bytes ??
+        (file.path != null ? await File(file.path!).readAsBytes() : null);
+    if (bytes == null) return null;
     final archive = ZipDecoder().decodeBytes(bytes);
 
     List<JournalEntry> imported = const [];
