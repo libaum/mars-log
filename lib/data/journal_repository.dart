@@ -131,6 +131,10 @@ class JournalRepository {
     if (await audio.exists()) await audio.delete();
   }
 
+  /// Discards only the audio file, keeping the entry (used when the user opts to
+  /// drop audio after transcription). The caller sets [JournalEntry.audioDeleted].
+  Future<void> discardAudio(JournalEntry entry) => _deleteAudio(entry);
+
   /// Merge imported entries (dedupe by id); does not remove existing ones.
   Future<void> mergeAll(List<JournalEntry> imported) async {
     for (final entry in imported) {

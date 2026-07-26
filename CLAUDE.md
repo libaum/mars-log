@@ -8,7 +8,7 @@ Mars Log is a voice journal. Open → tap the circle → talk → done. On stop,
 
 **Deliberate philosophy exception:** unlike the rest of Mars, this app is *not* offline/backendless — audio + transcript go to the Gemini cloud. It is primarily a personal-use app. Everything except the AI analysis stays on device.
 
-**Core principle:** the journal (audio + transcript) is permanent; the interpretation (summary/mood/tags) is recomputable. Every entry records `analysisModel` + `analysisVersion`, and the detail screen offers "Neu analysieren".
+**Core principle:** the transcript is the permanent record; the interpretation (summary/mood/tags) is recomputable. Every entry records `analysisModel` + `analysisVersion`, and the detail screen offers "Neu analysieren". Audio is kept alongside the transcript but is *optional* — the "Audio nach Transkription löschen" setting discards it once `ready` (`audioDeleted` flag); re-analysis then runs from the transcript text (`GeminiService.analyzeText`) instead of the audio. Each entry can also carry an optional recording location (`latitude`/`longitude` + editable `place` label).
 
 ## Common Commands
 
@@ -31,18 +31,20 @@ Managers expose state via `ValueNotifier`; UI subscribes with `ValueListenableBu
 | Class | Responsibility |
 |---|---|
 | `JournalRepository` | Owns `entries.json` + `audio/` in app documents dir; in-memory list, persisted on every mutation. Delete is a soft-delete (`deletedAt`); trashed entries are purged on load after `trashRetention` (30 days) |
-| `LocalStorageService` | SharedPreferences: theme + lock flags + analysis version (non-sensitive) |
+| `LocalStorageService` | SharedPreferences: theme + lock flags + analysis version + reminder + "delete audio after transcription" flag (non-sensitive) |
 | `SecureStorageService` | flutter_secure_storage: Gemini API key + PIN hash (sha256) |
-| `GeminiService` | One multimodal `generateContent` call (audio in, structured JSON out) |
+| `GeminiService` | `generateContent`: `analyze` (audio in) or `analyzeText` (transcript in when audio is gone) → structured JSON out |
 | `ExportService` | Zip export (`entries.json` + audio) via share sheet; import + merge by id |
 | `RecordingManager` | Microphone lifecycle; records WAV 16 kHz mono; timer |
-| `JournalManager` | Core state: `entriesNotifier` + `trashNotifier`, `createFromAudio`, `reanalyze`, `delete` (soft, to trash), `restore`, `purge`, `emptyTrash` |
+| `LocationService` | Best-effort GPS + reverse-geocoded label for a new entry; silent/nullable, never throws |
+| `NotificationManager` | Optional evening reminder; schedules a rolling window of one-shots, skipping days that already have a log |
+| `JournalManager` | Core state: `entriesNotifier` + `trashNotifier`, `createFromAudio`, `reanalyze`, `delete` (soft, to trash), `restore`, `purge`, `emptyTrash`, `setDay`, `setPlace` |
 | `SettingsManager` | API key + PIN/biometric toggles |
 | `LockManager` | Optional PIN/biometric gate; re-locks on app resume |
 | `ThemeManager` | Light/dark following system (Mars pattern) |
 
 ### Recording → analysis flow
-Tap stop → `RecordingManager.stop()` returns a `RecordingResult` → `JournalManager.createFromAudio` writes a provisional `analyzing` entry (UI shows a spinner) → `GeminiService.analyze` → entry becomes `ready` (or `failed` with the audio kept for retry).
+Tap stop → `RecordingManager.stop()` returns a `RecordingResult` → `JournalManager.createFromAudio` writes a provisional `analyzing` entry (UI shows a spinner) → best-effort `LocationService` stamp → `GeminiService.analyze` → entry becomes `ready` (or `failed` with the audio kept for retry). On success, if the "delete audio after transcription" setting is on, the audio is discarded and `audioDeleted` set.
 
 ### Persistence
 `<appDocuments>/entries.json` (index) + `<appDocuments>/audio/<id>.wav`. Transcripts can be long, so entries live in a JSON file rather than SharedPreferences, which also makes export a simple directory zip. No backend/sync.
@@ -52,7 +54,7 @@ Tap stop → `RecordingManager.stop()` returns a `RecordingResult` → `JournalM
 lib/
 ├── data/        # local_storage, secure_storage, journal_repository, gemini_service, export_service
 ├── domain/      # journal_entry (model + AnalysisResult + EntryStatus), mood (emoji/date helpers)
-├── logic/       # recording_manager, journal_manager, settings_manager, lock_manager
+├── logic/       # recording_manager, journal_manager, settings_manager, lock_manager, location_service, notification_manager
 ├── pages/       # main / entry_detail / settings / lock / about screens + widgets/
 ├── services/    # service_locator.dart
 ├── theme/       # theme_constants (SCREAMING_CASE), theme_manager
@@ -61,14 +63,14 @@ lib/
 
 ## Key Interactions
 - **Tap** the circle → start/stop recording (entry then analyzes itself)
-- **Tap** a timeline row → entry detail (playback, transcript, summary, mood, tags, re-analyze, delete)
+- **Tap** a timeline row → entry detail (playback, location label, transcript, summary, mood, tags, re-analyze, delete). Tap the date to backdate, tap the location to set/adjust the label.
 - **Swipe left** on a row → delete (asks first, then moves to the trash)
 - **Long-press** the header/record area → Settings
 - **Double-tap** anywhere → toggle theme
 
 ## Setup notes
 - Gemini API key is entered in Settings (Google AI Studio, free tier). Without it, entries fail with a clear message and can be re-analysed once a key is set.
-- Android: `RECORD_AUDIO` + `INTERNET` permissions; `MainActivity` extends `FlutterFragmentActivity` (required by `local_auth`); `minSdk` 23.
+- Android: `RECORD_AUDIO` + `INTERNET` + `POST_NOTIFICATIONS` + `ACCESS_COARSE/FINE_LOCATION` permissions; `MainActivity` extends `FlutterFragmentActivity` (required by `local_auth`); `minSdk` 23. Location is requested at first recording and is optional — denial just leaves entries without a location.
 - AGP 8.11.1 / Kotlin 2.2.20 / Gradle 8.14 (matches mars_fx; the Flutter 3.44 template's preview AGP 9 breaks `flutter_secure_storage` dexing).
 
 ## Build Variants

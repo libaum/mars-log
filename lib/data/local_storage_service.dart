@@ -7,6 +7,10 @@ class LocalStorageService {
   static const _keyPinEnabled = 'pin_enabled';
   static const _keyBiometricEnabled = 'biometric_enabled';
   static const _keyAnalysisVersion = 'analysis_version';
+  static const _keyReminderEnabled = 'reminder_enabled';
+  static const _keyReminderMinutes = 'reminder_minutes';
+  static const _keyDeleteAudioAfterTranscription =
+      'delete_audio_after_transcription';
 
   final SharedPreferences _prefs;
 
@@ -34,4 +38,21 @@ class LocalStorageService {
   int getAnalysisVersion() => _prefs.getInt(_keyAnalysisVersion) ?? 0;
   Future<void> setAnalysisVersion(int v) =>
       _prefs.setInt(_keyAnalysisVersion, v);
+
+  /// Evening reminder: on/off and time-of-day as minutes past midnight
+  /// (defaults to 21:00 = 1260).
+  bool getReminderEnabled() => _prefs.getBool(_keyReminderEnabled) ?? false;
+  Future<void> setReminderEnabled(bool v) =>
+      _prefs.setBool(_keyReminderEnabled, v);
+
+  int getReminderMinutes() => _prefs.getInt(_keyReminderMinutes) ?? 21 * 60;
+  Future<void> setReminderMinutes(int v) =>
+      _prefs.setInt(_keyReminderMinutes, v);
+
+  /// When on, an entry's audio is discarded once it has been transcribed
+  /// (status `ready`). The transcript then becomes the sole source of truth.
+  bool getDeleteAudioAfterTranscription() =>
+      _prefs.getBool(_keyDeleteAudioAfterTranscription) ?? false;
+  Future<void> setDeleteAudioAfterTranscription(bool v) =>
+      _prefs.setBool(_keyDeleteAudioAfterTranscription, v);
 }

@@ -2,8 +2,10 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:mars_log/data/gemini_service.dart';
 import 'package:mars_log/data/journal_repository.dart';
+import 'package:mars_log/data/local_storage_service.dart';
 import 'package:mars_log/data/secure_storage_service.dart';
 import 'package:mars_log/domain/journal_entry.dart';
+import 'package:mars_log/logic/location_service.dart';
 import 'package:mars_log/logic/recording_manager.dart';
 import 'package:mars_log/services/service_locator.dart';
 
@@ -13,6 +15,8 @@ class JournalManager {
   final _repo = getIt<JournalRepository>();
   final _gemini = getIt<GeminiService>();
   final _secure = getIt<SecureStorageService>();
+  final _storage = getIt<LocalStorageService>();
+  final _location = getIt<LocationService>();
 
   late final ValueNotifier<List<JournalEntry>> entriesNotifier;
   late final ValueNotifier<List<JournalEntry>> trashNotifier;
@@ -38,7 +42,20 @@ class JournalManager {
     );
     await _repo.upsert(entry);
     _refresh();
+    await _attachLocation(entry);
     await _analyze(entry);
+  }
+
+  /// Best-effort: stamp the entry with where it was recorded. Silent on failure.
+  Future<void> _attachLocation(JournalEntry entry) async {
+    final loc = await _location.current();
+    if (loc == null) return;
+    entry
+      ..latitude = loc.latitude
+      ..longitude = loc.longitude
+      ..place = loc.place;
+    await _repo.upsert(entry);
+    _refresh();
   }
 
   /// Re-runs analysis on an existing entry; audio + previous data are kept
@@ -54,10 +71,16 @@ class JournalManager {
   Future<void> _analyze(JournalEntry entry) async {
     try {
       final apiKey = await _secure.getApiKey() ?? '';
-      final result = await _gemini.analyze(
-        audioFile: File(_repo.audioPath(entry.audioFileName)),
-        apiKey: apiKey,
-      );
+      // Once the audio is gone, the transcript is the only source to work from.
+      final result = entry.audioDeleted
+          ? await _gemini.analyzeText(
+              transcript: entry.transcript ?? '',
+              apiKey: apiKey,
+            )
+          : await _gemini.analyze(
+              audioFile: File(_repo.audioPath(entry.audioFileName)),
+              apiKey: apiKey,
+            );
       entry
         ..transcript = result.transcript
         ..summary = result.summary
@@ -69,6 +92,7 @@ class JournalManager {
         ..analysisVersion = kAnalysisVersion
         ..errorMessage = null
         ..status = EntryStatus.ready;
+      await _maybeDiscardAudio(entry);
     } catch (e) {
       entry
         ..status = EntryStatus.failed
@@ -76,6 +100,15 @@ class JournalManager {
     }
     await _repo.upsert(entry);
     _refresh();
+  }
+
+  /// If the "delete audio after transcription" setting is on, drop the audio now
+  /// that a transcript exists. Only fires on a successful, audio-backed pass.
+  Future<void> _maybeDiscardAudio(JournalEntry entry) async {
+    if (entry.audioDeleted) return;
+    if (!_storage.getDeleteAudioAfterTranscription()) return;
+    await _repo.discardAudio(entry);
+    entry.audioDeleted = true;
   }
 
   /// Soft-delete: moves an entry to the trash (recoverable). Marks it deleted
@@ -108,6 +141,14 @@ class JournalManager {
   /// Moves an entry to a different day (e.g. backdating). Re-sorts the timeline.
   Future<void> setDay(JournalEntry entry, DateTime day) async {
     entry.day = DateTime(day.year, day.month, day.day);
+    await _repo.upsert(entry);
+    _refresh();
+  }
+
+  /// Sets or clears the entry's location label (also works on old entries).
+  Future<void> setPlace(JournalEntry entry, String? place) async {
+    final trimmed = place?.trim();
+    entry.place = (trimmed == null || trimmed.isEmpty) ? null : trimmed;
     await _repo.upsert(entry);
     _refresh();
   }

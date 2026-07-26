@@ -14,9 +14,12 @@ const kMoodDimensions = <String>[
 
 /// A single journal entry.
 ///
-/// Audio + transcript are the permanent source of truth. Everything derived
-/// (summary, mood, tags, dimensions) may be recomputed later with a better
-/// prompt/model — see [analysisModel] / [analysisVersion].
+/// The transcript is the permanent source of truth. Audio is kept alongside it
+/// but may be discarded once transcribed (see [audioDeleted] and the
+/// "delete audio after transcription" setting); re-analysis then works from the
+/// transcript text. Everything derived (summary, mood, tags, dimensions) may be
+/// recomputed later with a better prompt/model — see [analysisModel] /
+/// [analysisVersion].
 class JournalEntry {
   final String id;
   final DateTime createdAt;
@@ -33,6 +36,17 @@ class JournalEntry {
   String? analysisModel;
   int? analysisVersion;
   String? errorMessage;
+
+  /// True once the audio file has been discarded after transcription. The entry
+  /// then lives on the transcript alone; playback is unavailable.
+  bool audioDeleted;
+
+  /// Optional location where the entry was recorded. [place] is a human-readable
+  /// label (reverse-geocoded, user-editable); the coordinates are kept for
+  /// reference. All three may be null (permission denied, offline, old entry).
+  double? latitude;
+  double? longitude;
+  String? place;
 
   /// When non-null, the entry lives in the trash (soft-deleted). Audio +
   /// transcript are kept until it is purged (manually or after retention).
@@ -54,6 +68,10 @@ class JournalEntry {
     this.analysisVersion,
     this.errorMessage,
     this.deletedAt,
+    this.audioDeleted = false,
+    this.latitude,
+    this.longitude,
+    this.place,
   }) : tags = tags ?? const [];
 
   Map<String, dynamic> toJson() => {
@@ -72,6 +90,10 @@ class JournalEntry {
         'analysisVersion': analysisVersion,
         'errorMessage': errorMessage,
         'deletedAt': deletedAt?.toIso8601String(),
+        'audioDeleted': audioDeleted,
+        'latitude': latitude,
+        'longitude': longitude,
+        'place': place,
       };
 
   factory JournalEntry.fromJson(Map<String, dynamic> json) {
@@ -100,6 +122,10 @@ class JournalEntry {
       deletedAt: json['deletedAt'] == null
           ? null
           : DateTime.parse(json['deletedAt'] as String),
+      audioDeleted: json['audioDeleted'] as bool? ?? false,
+      latitude: (json['latitude'] as num?)?.toDouble(),
+      longitude: (json['longitude'] as num?)?.toDouble(),
+      place: json['place'] as String?,
     );
   }
 }

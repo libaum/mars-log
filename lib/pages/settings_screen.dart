@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:mars_log/data/export_service.dart';
+import 'package:mars_log/data/local_storage_service.dart';
 import 'package:mars_log/domain/journal_entry.dart';
 import 'package:mars_log/logic/journal_manager.dart';
+import 'package:mars_log/logic/notification_manager.dart';
 import 'package:mars_log/logic/settings_manager.dart';
 import 'package:mars_log/logic/lock_manager.dart';
 import 'package:mars_log/pages/about_screen.dart';
@@ -22,6 +24,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final _lock = getIt<LockManager>();
   final _export = getIt<ExportService>();
   final _journal = getIt<JournalManager>();
+  final _notifications = getIt<NotificationManager>();
+  final _storage = getIt<LocalStorageService>();
 
   Future<void> _editApiKey() async {
     final current = await _settings.getApiKey() ?? '';
@@ -125,6 +129,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await _settings.setBiometricEnabled(value);
   }
 
+  Future<void> _toggleReminder(bool value) async {
+    final ok = await _notifications.setEnabled(value);
+    if (value && !ok) _snack('Benachrichtigungen nicht erlaubt.');
+  }
+
+  Future<void> _toggleDeleteAudio(bool value) async {
+    await _storage.setDeleteAudioAfterTranscription(value);
+    setState(() {});
+  }
+
+  Future<void> _pickReminderTime() async {
+    final picked = await showTimePicker(
+      context: context,
+      initialTime: _notifications.timeNotifier.value,
+    );
+    if (picked != null) await _notifications.setTime(picked);
+  }
+
   void _snack(String msg) {
     if (mounted) {
       ScaffoldMessenger.of(context)
@@ -193,6 +215,39 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   enabled,
                   _toggleBiometric,
                 ),
+              ),
+              _divider(),
+
+              ValueListenableBuilder<bool>(
+                valueListenable: _notifications.enabledNotifier,
+                builder: (context, enabled, _) => Column(
+                  children: [
+                    _toggleRow(
+                      'Erinnerung',
+                      'Abends an den Log erinnern',
+                      enabled,
+                      _toggleReminder,
+                    ),
+                    if (enabled) ...[
+                      _divider(),
+                      ValueListenableBuilder<TimeOfDay>(
+                        valueListenable: _notifications.timeNotifier,
+                        builder: (context, time, _) => _valueRow(
+                          'Uhrzeit',
+                          time.format(context),
+                          _pickReminderTime,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              _divider(),
+              _toggleRow(
+                'Audio nach Transkription löschen',
+                'Spart Speicher — das Transkript bleibt erhalten',
+                _storage.getDeleteAudioAfterTranscription(),
+                _toggleDeleteAudio,
               ),
               _divider(),
               _navRow('About', () {

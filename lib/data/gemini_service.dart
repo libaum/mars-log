@@ -37,6 +37,24 @@ Wenn die Aufnahme leer oder unverständlich ist, gib einen leeren transcript,
 eine kurze Erklärung als summary, moodScore 5.0 und neutrale Werte zurück.
 ''';
 
+  /// Text-only variant: used when the audio has already been discarded and only
+  /// the transcript survives. The transcript is returned unchanged.
+  static const _promptText = '''
+Du bist der Analyse-Assistent einer Sprach-Tagebuch-App. Unten steht das bereits
+transkribierte Tagebuch des Nutzers. Analysiere den Text und antworte
+ausschließlich mit dem geforderten JSON.
+
+Aufgaben:
+1. transcript: Gib den Text unverändert zurück.
+2. summary: Fasse den Eintrag in 3–5 Sätzen aus der Ich-Perspektive zusammen.
+3. moodLabel: Ein einzelnes deutsches Wort für die Grundstimmung (z.B. "Motiviert", "Erschöpft", "Ausgeglichen").
+4. moodScore: Wie gut der Tag insgesamt klingt, von 0.0 (sehr schlecht) bis 10.0 (großartig).
+5. dimensions: Schätze jede Dimension von 0 bis 100 – positivity, energy, calm, stress, focus, social.
+6. tags: 3 bis 6 kurze Themen-Tags (deutsche Substantive, z.B. "Sport", "Arbeit", "Freunde").
+
+Transkript:
+''';
+
   static final Map<String, Object> _responseSchema = {
     'type': 'OBJECT',
     'properties': {
@@ -88,21 +106,42 @@ eine kurze Erklärung als summary, moodScore 5.0 und neutrale Werte zurück.
     }
 
     final bytes = await audioFile.readAsBytes();
+    return _generate(apiKey, [
+      {'text': _prompt},
+      {
+        'inline_data': {
+          'mime_type': 'audio/wav',
+          'data': base64Encode(bytes),
+        },
+      },
+    ]);
+  }
+
+  /// Re-analyse from the transcript alone (used when the audio was discarded).
+  Future<AnalysisResult> analyzeText({
+    required String transcript,
+    required String apiKey,
+  }) async {
+    if (apiKey.trim().isEmpty) {
+      throw GeminiException('Kein Gemini API-Key hinterlegt.');
+    }
+    if (transcript.trim().isEmpty) {
+      throw GeminiException('Kein Transkript vorhanden.');
+    }
+    return _generate(apiKey, [
+      {'text': '$_promptText$transcript'},
+    ]);
+  }
+
+  Future<AnalysisResult> _generate(
+    String apiKey,
+    List<Map<String, Object>> parts,
+  ) async {
     final uri = Uri.parse('$_endpoint/$kGeminiModel:generateContent?key=$apiKey');
 
     final body = jsonEncode({
       'contents': [
-        {
-          'parts': [
-            {'text': _prompt},
-            {
-              'inline_data': {
-                'mime_type': 'audio/wav',
-                'data': base64Encode(bytes),
-              },
-            },
-          ],
-        },
+        {'parts': parts},
       ],
       'generationConfig': {
         'responseMimeType': 'application/json',

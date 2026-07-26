@@ -61,6 +61,43 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
     if (picked != null) await _journal.setDay(entry, picked);
   }
 
+  /// Prefers the readable label, falls back to raw coordinates so a captured
+  /// location is still visible if reverse-geocoding failed, else a prompt.
+  String _placeLabel(JournalEntry entry) {
+    if (entry.place != null && entry.place!.isNotEmpty) return entry.place!;
+    if (entry.latitude != null && entry.longitude != null) {
+      return '${entry.latitude!.toStringAsFixed(4)}, '
+          '${entry.longitude!.toStringAsFixed(4)}';
+    }
+    return 'Ort hinzufügen';
+  }
+
+  Future<void> _editPlace(JournalEntry entry) async {
+    final controller = TextEditingController(text: entry.place ?? '');
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Ort', style: TEXT_STYLE_SETTING),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(hintText: 'z.B. Berlin, Kreuzberg'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, controller.text),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    if (result != null) await _journal.setPlace(entry, result);
+  }
+
   @override
   Widget build(BuildContext context) {
     return DoubleTapThemeToggle(
@@ -114,29 +151,54 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
             ],
           ),
         ),
+        const SizedBox(height: 16),
+
+        // Location — tap to set/adjust the label (also on old entries).
+        GestureDetector(
+          onTap: () => _editPlace(entry),
+          behavior: HitTestBehavior.opaque,
+          child: Row(
+            children: [
+              Icon(Icons.place_outlined,
+                  size: 16, color: primary.withValues(alpha: 0.4)),
+              const SizedBox(width: 6),
+              Text(_placeLabel(entry), style: TEXT_STYLE_STATUS),
+            ],
+          ),
+        ),
         const SizedBox(height: 28),
 
-        // Audio playback
-        Row(
-          children: [
-            GestureDetector(
-              onTap: () => _togglePlay(entry),
-              behavior: HitTestBehavior.opaque,
-              child: Container(
-                width: 56,
-                height: 56,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  border: Border.all(color: primary.withValues(alpha: 0.4)),
+        // Audio playback (unavailable once the audio has been discarded)
+        if (entry.audioDeleted)
+          Row(
+            children: [
+              Icon(Icons.mic_off_outlined,
+                  size: 20, color: primary.withValues(alpha: 0.4)),
+              const SizedBox(width: 12),
+              Text('Aufnahme gelöscht', style: TEXT_STYLE_STATUS),
+            ],
+          )
+        else
+          Row(
+            children: [
+              GestureDetector(
+                onTap: () => _togglePlay(entry),
+                behavior: HitTestBehavior.opaque,
+                child: Container(
+                  width: 56,
+                  height: 56,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    border: Border.all(color: primary.withValues(alpha: 0.4)),
+                  ),
+                  child: Icon(_playing ? Icons.pause : Icons.play_arrow,
+                      color: primary),
                 ),
-                child: Icon(_playing ? Icons.pause : Icons.play_arrow,
-                    color: primary),
               ),
-            ),
-            const SizedBox(width: 16),
-            Text('Aufnahme', style: TEXT_STYLE_STATUS),
-          ],
-        ),
+              const SizedBox(width: 16),
+              Text('Aufnahme', style: TEXT_STYLE_STATUS),
+            ],
+          ),
         const SizedBox(height: 32),
 
         if (analyzing)

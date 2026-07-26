@@ -5,7 +5,9 @@ import 'package:mars_log/data/journal_repository.dart';
 import 'package:mars_log/data/local_storage_service.dart';
 import 'package:mars_log/data/secure_storage_service.dart';
 import 'package:mars_log/logic/journal_manager.dart';
+import 'package:mars_log/logic/location_service.dart';
 import 'package:mars_log/logic/lock_manager.dart';
+import 'package:mars_log/logic/notification_manager.dart';
 import 'package:mars_log/logic/recording_manager.dart';
 import 'package:mars_log/logic/settings_manager.dart';
 import 'package:mars_log/theme/theme_manager.dart';
@@ -23,6 +25,7 @@ Future<void> setupServiceLocator() async {
     await JournalRepository.getInstance(),
   );
   getIt.registerSingleton<GeminiService>(GeminiService());
+  getIt.registerSingleton<LocationService>(LocationService());
 
   getIt.registerSingleton<ThemeManager>(ThemeManager());
   getIt.registerSingleton<SettingsManager>(SettingsManager());
@@ -32,4 +35,8 @@ Future<void> setupServiceLocator() async {
     ExportService(getIt<JournalRepository>()),
   );
   getIt.registerSingleton<LockManager>(LockManager());
+
+  final notifications = NotificationManager();
+  getIt.registerSingleton<NotificationManager>(notifications);
+  await notifications.init();
 }
