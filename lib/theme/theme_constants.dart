@@ -62,6 +62,20 @@ const TEXT_STYLE_SETTING = TextStyle(
   fontWeight: FontWeight.w300,
 );
 
+/// Shared settings-screen row styles (see Mars DESIGN.md)
+const TEXT_STYLE_SETTINGS_TITLE = TextStyle(fontSize: 30, fontWeight: FontWeight.w300);
+const TEXT_STYLE_SETTINGS_ITEM = TextStyle(fontSize: 19, fontWeight: FontWeight.w300);
+const TEXT_STYLE_SETTINGS_DESCRIPTION = TextStyle(
+  fontSize: 13,
+  fontWeight: FontWeight.w300,
+  color: COLOR_SECONDARY,
+);
+const TEXT_STYLE_SETTINGS_TRAILING = TextStyle(
+  fontSize: 16,
+  fontWeight: FontWeight.w300,
+  color: COLOR_SECONDARY,
+);
+
 /// Theme builders
 ThemeData buildLightTheme() => ThemeData(
       colorScheme: const ColorScheme.light(

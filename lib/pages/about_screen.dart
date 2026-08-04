@@ -29,7 +29,7 @@ class AboutScreen extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('Mars Log', style: TEXT_STYLE_TITLE),
+                  Text('Mars Log', style: TEXT_STYLE_TITLE.copyWith(color: primary)),
                   const SizedBox(height: 32),
                   // This app — personal "why" + the single idea.
                   Text(

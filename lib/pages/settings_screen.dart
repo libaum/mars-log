@@ -11,6 +11,7 @@ import 'package:mars_log/pages/trash_screen.dart';
 import 'package:mars_log/pages/widgets/double_tap_theme_toggle.dart';
 import 'package:mars_log/services/service_locator.dart';
 import 'package:mars_log/theme/theme_constants.dart';
+import 'package:mars_log/theme/theme_manager.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -20,6 +21,7 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
+  final _themeManager = getIt<ThemeManager>();
   final _settings = getIt<SettingsManager>();
   final _lock = getIt<LockManager>();
   final _export = getIt<ExportService>();
@@ -131,7 +133,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _toggleReminder(bool value) async {
     final ok = await _notifications.setEnabled(value);
-    if (value && !ok) _snack('Benachrichtigungen nicht erlaubt.');
+    if (value && !ok) _snack('Notifications not allowed.');
   }
 
   Future<void> _toggleDeleteAudio(bool value) async {
@@ -149,141 +151,143 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   void _snack(String msg) {
     if (mounted) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(msg)));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final primary = Theme.of(context).colorScheme.primary;
     return DoubleTapThemeToggle(
       child: Scaffold(
         body: SafeArea(
-          child: ListView(
-            children: [
-              const SizedBox(height: 32),
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 32),
-                child: Text('Settings', style: TEXT_STYLE_TITLE),
-              ),
-              const SizedBox(height: 40),
-
-              ValueListenableBuilder<bool>(
-                valueListenable: _settings.hasApiKeyNotifier,
-                builder: (context, hasKey, _) => _valueRow(
-                  'Gemini API key',
-                  hasKey ? 'set' : 'not set',
-                  _editApiKey,
-                ),
-              ),
-              _divider(),
-              _actionRow('Export (share)', _doExport),
-              _divider(),
-              _actionRow('Export (save to device)', _doExportToDisk),
-              _divider(),
-              _actionRow('Import', _doImport),
-              _divider(),
-
-              ValueListenableBuilder<List<JournalEntry>>(
-                valueListenable: _journal.trashNotifier,
-                builder: (context, trash, _) => _valueRow(
-                  'Papierkorb',
-                  trash.isEmpty ? '' : '${trash.length}',
-                  () => Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (_) => const TrashScreen()),
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const SizedBox(height: 32),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(40, 0, 50, 0),
+                  child: Text(
+                    'Settings',
+                    style: TEXT_STYLE_SETTINGS_TITLE.copyWith(color: primary),
                   ),
                 ),
-              ),
-              _divider(),
+                const SizedBox(height: 40),
 
-              ValueListenableBuilder<bool>(
-                valueListenable: _settings.pinEnabledNotifier,
-                builder: (context, enabled, _) => _toggleRow(
-                  'PIN lock',
-                  'Protect the app with a PIN on open',
-                  enabled,
-                  _togglePin,
+                ValueListenableBuilder<ThemeMode>(
+                  valueListenable: _themeManager.themeModeNotifier,
+                  builder: (context, _, _) {
+                    final isDark =
+                        Theme.of(context).brightness == Brightness.dark;
+                    return _navRow(
+                      'Appearance',
+                      trailing: isDark ? 'Dark' : 'Light',
+                      onTap: _themeManager.toggleTheme,
+                    );
+                  },
                 ),
-              ),
-              _divider(),
-              ValueListenableBuilder<bool>(
-                valueListenable: _settings.biometricEnabledNotifier,
-                builder: (context, enabled, _) => _toggleRow(
-                  'Biometrics',
-                  'Fingerprint / Face Unlock',
-                  enabled,
-                  _toggleBiometric,
+                ValueListenableBuilder<bool>(
+                  valueListenable: _settings.hasApiKeyNotifier,
+                  builder: (context, hasKey, _) => _actionRow(
+                    hasKey ? 'Gemini API key · Set' : 'Gemini API key',
+                    _editApiKey,
+                  ),
                 ),
-              ),
-              _divider(),
-
-              ValueListenableBuilder<bool>(
-                valueListenable: _notifications.enabledNotifier,
-                builder: (context, enabled, _) => Column(
-                  children: [
-                    _toggleRow(
-                      'Erinnerung',
-                      'Abends an den Log erinnern',
-                      enabled,
-                      _toggleReminder,
-                    ),
-                    if (enabled) ...[
-                      _divider(),
-                      ValueListenableBuilder<TimeOfDay>(
-                        valueListenable: _notifications.timeNotifier,
-                        builder: (context, time, _) => _valueRow(
-                          'Uhrzeit',
-                          time.format(context),
-                          _pickReminderTime,
-                        ),
+                ValueListenableBuilder<bool>(
+                  valueListenable: _settings.pinEnabledNotifier,
+                  builder: (context, enabled, _) => _toggleRow(
+                    'PIN lock',
+                    'Protect the app with a PIN on open',
+                    enabled,
+                    () => _togglePin(!enabled),
+                  ),
+                ),
+                ValueListenableBuilder<bool>(
+                  valueListenable: _settings.biometricEnabledNotifier,
+                  builder: (context, enabled, _) => _toggleRow(
+                    'Biometrics',
+                    'Fingerprint / Face Unlock',
+                    enabled,
+                    () => _toggleBiometric(!enabled),
+                  ),
+                ),
+                ValueListenableBuilder<bool>(
+                  valueListenable: _notifications.enabledNotifier,
+                  builder: (context, enabled, _) => Column(
+                    children: [
+                      _toggleRow(
+                        'Reminder',
+                        'Remind me in the evening to log',
+                        enabled,
+                        () => _toggleReminder(!enabled),
                       ),
+                      if (enabled)
+                        ValueListenableBuilder<TimeOfDay>(
+                          valueListenable: _notifications.timeNotifier,
+                          builder: (context, time, _) => _valueRow(
+                            'Time',
+                            time.format(context),
+                            _pickReminderTime,
+                          ),
+                        ),
                     ],
-                  ],
+                  ),
                 ),
-              ),
-              _divider(),
-              _toggleRow(
-                'Audio nach Transkription löschen',
-                'Spart Speicher — das Transkript bleibt erhalten',
-                _storage.getDeleteAudioAfterTranscription(),
-                _toggleDeleteAudio,
-              ),
-              _divider(),
-              _navRow('About', () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const AboutScreen()),
-                );
-              }),
-            ],
+                _toggleRow(
+                  'Delete audio after transcription',
+                  'Saves space — the transcript stays',
+                  _storage.getDeleteAudioAfterTranscription(),
+                  () => _toggleDeleteAudio(
+                    !_storage.getDeleteAudioAfterTranscription(),
+                  ),
+                ),
+                _actionRow('Export (share)', _doExport),
+                _actionRow('Export (save to device)', _doExportToDisk),
+                _actionRow('Import', _doImport),
+                ValueListenableBuilder<List<JournalEntry>>(
+                  valueListenable: _journal.trashNotifier,
+                  builder: (context, trash, _) => _navRow(
+                    'Trash',
+                    trailing: trash.isEmpty ? null : '${trash.length}',
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const TrashScreen()),
+                    ),
+                  ),
+                ),
+                _navRow(
+                  'About',
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const AboutScreen()),
+                  ),
+                ),
+                const SizedBox(height: 20),
+              ],
+            ),
           ),
         ),
       ),
     );
   }
 
-  Widget _divider() => Divider(
-        height: 1,
-        thickness: 0.5,
-        indent: 32,
-        endIndent: 32,
-        color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.1),
-      );
-
   Widget _valueRow(String label, String value, VoidCallback onTap) {
-    final primary = Theme.of(context).colorScheme.primary;
     return InkWell(
       onTap: onTap,
       splashColor: Colors.transparent,
       highlightColor: Colors.transparent,
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 20),
+        padding: const EdgeInsets.fromLTRB(40, 20, 50, 20),
         child: Row(
           children: [
-            Expanded(child: Text(label, style: TEXT_STYLE_SETTING)),
-            Text(value, style: const TextStyle(color: COLOR_SECONDARY)),
-            Icon(Icons.chevron_right, color: primary.withValues(alpha: 0.3)),
+            Expanded(child: Text(label, style: TEXT_STYLE_SETTINGS_ITEM)),
+            SizedBox(
+              width: 60,
+              child: Center(
+                child: Text(value, style: TEXT_STYLE_SETTINGS_TRAILING),
+              ),
+            ),
           ],
         ),
       ),
@@ -296,24 +300,39 @@ class _SettingsScreenState extends State<SettingsScreen> {
       splashColor: Colors.transparent,
       highlightColor: Colors.transparent,
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 20),
-        child: Text(label, style: TEXT_STYLE_SETTING),
+        padding: const EdgeInsets.fromLTRB(40, 20, 50, 20),
+        child: Text(label, style: TEXT_STYLE_SETTINGS_ITEM),
       ),
     );
   }
 
-  Widget _navRow(String label, VoidCallback onTap) {
+  Widget _navRow(
+    String label, {
+    String? trailing,
+    required VoidCallback onTap,
+  }) {
     final primary = Theme.of(context).colorScheme.primary;
     return InkWell(
       onTap: onTap,
       splashColor: Colors.transparent,
       highlightColor: Colors.transparent,
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 20),
+        padding: const EdgeInsets.fromLTRB(40, 20, 50, 20),
         child: Row(
           children: [
-            Expanded(child: Text(label, style: TEXT_STYLE_SETTING)),
-            Icon(Icons.chevron_right, color: primary.withValues(alpha: 0.3)),
+            Expanded(child: Text(label, style: TEXT_STYLE_SETTINGS_ITEM)),
+            SizedBox(
+              width: 60,
+              child: Center(
+                child: trailing != null
+                    ? Text(trailing, style: TEXT_STYLE_SETTINGS_TRAILING)
+                    : Icon(
+                        Icons.chevron_right,
+                        size: 20,
+                        color: primary.withValues(alpha: 0.3),
+                      ),
+              ),
+            ),
           ],
         ),
       ),
@@ -324,29 +343,37 @@ class _SettingsScreenState extends State<SettingsScreen> {
     String label,
     String description,
     bool value,
-    ValueChanged<bool> onChanged,
+    VoidCallback onTap,
   ) {
-    final primary = Theme.of(context).colorScheme.primary;
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(label, style: TEXT_STYLE_SETTING),
-                const SizedBox(height: 4),
-                Text(description, style: TEXT_STYLE_STATUS),
-              ],
+    return InkWell(
+      onTap: onTap,
+      splashColor: Colors.transparent,
+      highlightColor: Colors.transparent,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(40, 20, 50, 20),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(label, style: TEXT_STYLE_SETTINGS_ITEM),
+                  const SizedBox(height: 2),
+                  Text(description, style: TEXT_STYLE_SETTINGS_DESCRIPTION),
+                ],
+              ),
             ),
-          ),
-          Switch(
-            value: value,
-            onChanged: onChanged,
-            activeThumbColor: primary,
-          ),
-        ],
+            SizedBox(
+              width: 60,
+              child: Center(
+                child: Text(
+                  value ? 'On' : 'Off',
+                  style: TEXT_STYLE_SETTINGS_TRAILING,
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
