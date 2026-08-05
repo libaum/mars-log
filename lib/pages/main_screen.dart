@@ -83,8 +83,6 @@ class _MainScreenState extends State<MainScreen> {
                   padding: const EdgeInsets.only(top: 24, bottom: 28),
                   child: Column(
                     children: [
-                      Text('Mars Log', style: TEXT_STYLE_STATUS),
-                      const SizedBox(height: 28),
                       RecordButton(
                         onCircleTap: _onCircleTap,
                         onCancel: _cancelRecording,
