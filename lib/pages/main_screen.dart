@@ -80,7 +80,7 @@ class _MainScreenState extends State<MainScreen> {
                 onLongPress: _openSettings,
                 behavior: HitTestBehavior.opaque,
                 child: Padding(
-                  padding: const EdgeInsets.only(top: 68, bottom: 28),
+                  padding: const EdgeInsets.only(top: 56, bottom: 28),
                   child: Column(
                     children: [
                       RecordButton(
