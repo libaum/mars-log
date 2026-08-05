@@ -144,7 +144,26 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
                 }
                 return const SizedBox.shrink();
               }
-              return _content(entry);
+              final e = entry;
+              return Stack(
+                children: [
+                  _content(e),
+                  Positioned(
+                    top: 8,
+                    right: 16,
+                    child: IconButton(
+                      onPressed: () => _addRecording(e),
+                      icon: Icon(
+                        Icons.mic_none,
+                        color: Theme.of(context)
+                            .colorScheme
+                            .primary
+                            .withValues(alpha: 0.6),
+                      ),
+                    ),
+                  ),
+                ],
+              );
             },
           ),
         ),
@@ -184,22 +203,6 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
                   size: 16, color: primary.withValues(alpha: 0.4)),
               const SizedBox(width: 6),
               Text(_placeLabel(entry), style: TEXT_STYLE_STATUS),
-            ],
-          ),
-        ),
-        const SizedBox(height: 16),
-
-        // Add another recording, kept on this same day.
-        GestureDetector(
-          onTap: () => _addRecording(entry),
-          behavior: HitTestBehavior.opaque,
-          child: Row(
-            children: [
-              Icon(Icons.mic_none,
-                  size: 16, color: primary.withValues(alpha: 0.4)),
-              const SizedBox(width: 6),
-              Text('Weitere Aufnahme für diesen Tag',
-                  style: TEXT_STYLE_STATUS),
             ],
           ),
         ),
