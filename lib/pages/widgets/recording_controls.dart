@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:mars_log/domain/journal_entry.dart';
 import 'package:mars_log/logic/journal_manager.dart';
 import 'package:mars_log/logic/recording_manager.dart';
 import 'package:mars_log/pages/widgets/confirm_dialog.dart';
@@ -8,12 +9,12 @@ import 'package:mars_log/services/service_locator.dart';
 /// Wires [RecordButton] to [RecordingManager]/[JournalManager]: start/pause/
 /// resume via the circle tap, cancel (with confirmation) or send while paused.
 ///
-/// [day] pins a sent recording to a specific day (e.g. adding a second
-/// recording to an existing day) instead of the recording's own date.
+/// If [appendTo] is set, a sent recording is folded into that existing entry
+/// (same screen, merged transcript/analysis) instead of creating a new one.
 class RecordingControls extends StatelessWidget {
-  final DateTime? day;
+  final JournalEntry? appendTo;
   final VoidCallback? onSent;
-  const RecordingControls({super.key, this.day, this.onSent});
+  const RecordingControls({super.key, this.appendTo, this.onSent});
 
   @override
   Widget build(BuildContext context) {
@@ -47,7 +48,12 @@ class RecordingControls extends StatelessWidget {
         final result = await recording.stop();
         if (result != null) {
           // Fire-and-forget: the manager flips the entry to ready/failed itself.
-          journal.createFromAudio(result, day: day);
+          final target = appendTo;
+          if (target != null) {
+            journal.appendRecording(target, result);
+          } else {
+            journal.createFromAudio(result);
+          }
           onSent?.call();
         }
       },

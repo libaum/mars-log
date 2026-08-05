@@ -7,8 +7,9 @@ import 'package:share_plus/share_plus.dart';
 import 'package:mars_log/data/journal_repository.dart';
 import 'package:mars_log/domain/journal_entry.dart';
 
-/// Zips the whole journal (`entries.json` + `audio/`) for backup, and restores
-/// it again. Export/import is the app's only safety net against data loss.
+/// Zips the journal's `entries.json` (transcripts + metadata only, no audio —
+/// keeps exports small and fast) for backup, and restores it again.
+/// Export/import is the app's only safety net against data loss.
 class ExportService {
   final JournalRepository _repository;
 
@@ -25,10 +26,6 @@ class ExportService {
     final index = _repository.indexFile;
     if (await index.exists()) {
       await encoder.addFile(index, 'entries.json');
-    }
-    final audioDir = _repository.audioDir;
-    if (await audioDir.exists()) {
-      await encoder.addDirectory(audioDir, includeDirName: true);
     }
     await encoder.close();
     return zipPath;
@@ -55,8 +52,11 @@ class ExportService {
     );
   }
 
-  /// Lets the user pick a zip and merges its entries + audio into the journal.
-  /// Returns the number of newly imported entries, or null if cancelled.
+  /// Lets the user pick a zip and merges its entries (transcripts + metadata
+  /// only) into the journal. Imported entries never carry audio, even if the
+  /// source export predates this and still contains an `audio/` folder — it
+  /// is ignored. Returns the number of newly imported entries, or null if
+  /// cancelled.
   Future<int?> importFromPicker() async {
     // FileType.any (not custom/zip): Android's extension filter greys out
     // our .zip on many devices. withData ensures we get bytes even for
@@ -74,19 +74,15 @@ class ExportService {
     final beforeIds = _repository.entries.map((e) => e.id).toSet();
 
     for (final file in archive) {
-      if (!file.isFile) continue;
-      final name = file.name.split('/').last;
-
-      if (file.name.endsWith('entries.json')) {
-        final list = jsonDecode(utf8.decode(file.content as List<int>))
-            as List<dynamic>;
-        imported = list
-            .map((e) => JournalEntry.fromJson((e as Map).cast<String, dynamic>()))
-            .toList();
-      } else if (name.isNotEmpty && file.name.contains('audio/')) {
-        final out = File(_repository.audioPath(name));
-        await out.writeAsBytes(file.content as List<int>);
-      }
+      if (!file.isFile || !file.name.endsWith('entries.json')) continue;
+      final list = jsonDecode(utf8.decode(file.content as List<int>))
+          as List<dynamic>;
+      imported = list
+          .map((e) => JournalEntry.fromJson((e as Map).cast<String, dynamic>()))
+          .map((e) => e
+            ..audioDeleted = true
+            ..audioFileNames = [])
+          .toList();
     }
 
     await _repository.mergeAll(imported);

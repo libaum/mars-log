@@ -24,7 +24,11 @@ class JournalEntry {
   final String id;
   final DateTime createdAt;
   DateTime day;
-  final String audioFileName;
+
+  /// One or more recordings for this entry, oldest first. Usually just one;
+  /// more than one when further recordings were added for the same day via
+  /// "Weitere Aufnahme für diesen Tag".
+  List<String> audioFileNames;
 
   EntryStatus status;
   String? transcript;
@@ -56,7 +60,7 @@ class JournalEntry {
     required this.id,
     required this.createdAt,
     required this.day,
-    required this.audioFileName,
+    required this.audioFileNames,
     this.status = EntryStatus.analyzing,
     this.transcript,
     this.summary,
@@ -78,7 +82,7 @@ class JournalEntry {
         'id': id,
         'createdAt': createdAt.toIso8601String(),
         'day': day.toIso8601String(),
-        'audioFileName': audioFileName,
+        'audioFileNames': audioFileNames,
         'status': status.name,
         'transcript': transcript,
         'summary': summary,
@@ -102,7 +106,11 @@ class JournalEntry {
       id: json['id'] as String,
       createdAt: DateTime.parse(json['createdAt'] as String),
       day: DateTime.parse(json['day'] as String),
-      audioFileName: json['audioFileName'] as String,
+      // Back-compat: entries written before multi-recording support stored a
+      // single 'audioFileName' string instead of the 'audioFileNames' list.
+      audioFileNames: (json['audioFileNames'] as List<dynamic>?)
+              ?.cast<String>() ??
+          [json['audioFileName'] as String],
       status: EntryStatus.values.firstWhere(
         (s) => s.name == json['status'],
         orElse: () => EntryStatus.ready,

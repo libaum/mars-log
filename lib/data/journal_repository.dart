@@ -48,7 +48,7 @@ class JournalRepository {
   /// Deletes audio files that no entry points to — e.g. a recording whose app
   /// process died mid-way (killed, crashed) before an entry was ever created.
   Future<void> _purgeOrphanedAudio() async {
-    final known = _entries.map((e) => e.audioFileName).toSet();
+    final known = _entries.expand((e) => e.audioFileNames).toSet();
     final dir = Directory(audioDirPath);
     await for (final file in dir.list()) {
       if (file is! File) continue;
@@ -140,13 +140,22 @@ class JournalRepository {
   }
 
   Future<void> _deleteAudio(JournalEntry entry) async {
-    final audio = File(audioPath(entry.audioFileName));
-    if (await audio.exists()) await audio.delete();
+    for (final name in entry.audioFileNames) {
+      await deleteAudioFile(name);
+    }
   }
 
-  /// Discards only the audio file, keeping the entry (used when the user opts to
-  /// drop audio after transcription). The caller sets [JournalEntry.audioDeleted].
+  /// Discards all of the entry's audio files, keeping the entry (used when
+  /// the user opts to drop audio after transcription, or when a newly
+  /// recorded snippet's audio is folded into the transcript instead of being
+  /// kept). The caller sets [JournalEntry.audioDeleted] / clears the list.
   Future<void> discardAudio(JournalEntry entry) => _deleteAudio(entry);
+
+  /// Deletes a single standalone audio file by name.
+  Future<void> deleteAudioFile(String fileName) async {
+    final file = File(audioPath(fileName));
+    if (await file.exists()) await file.delete();
+  }
 
   /// Merge imported entries (dedupe by id); does not remove existing ones.
   Future<void> mergeAll(List<JournalEntry> imported) async {
@@ -160,5 +169,4 @@ class JournalRepository {
   }
 
   File get indexFile => File(_indexPath);
-  Directory get audioDir => Directory(audioDirPath);
 }

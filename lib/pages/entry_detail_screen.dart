@@ -24,14 +24,14 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
   final _journal = getIt<JournalManager>();
   final _repo = getIt<JournalRepository>();
   final _player = AudioPlayer();
-  bool _playing = false;
+  int? _playingIndex;
   bool _leaving = false;
 
   @override
   void initState() {
     super.initState();
     _player.onPlayerComplete.listen((_) {
-      if (mounted) setState(() => _playing = false);
+      if (mounted) setState(() => _playingIndex = null);
     });
   }
 
@@ -41,13 +41,14 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
     super.dispose();
   }
 
-  Future<void> _togglePlay(JournalEntry entry) async {
-    if (_playing) {
+  Future<void> _togglePlay(JournalEntry entry, int index) async {
+    if (_playingIndex == index) {
       await _player.pause();
-      setState(() => _playing = false);
+      setState(() => _playingIndex = null);
     } else {
-      await _player.play(DeviceFileSource(_repo.audioPath(entry.audioFileName)));
-      setState(() => _playing = true);
+      await _player
+          .play(DeviceFileSource(_repo.audioPath(entry.audioFileNames[index])));
+      setState(() => _playingIndex = index);
     }
   }
 
@@ -99,8 +100,9 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
     if (result != null) await _journal.setPlace(entry, result);
   }
 
-  /// Opens the recording controls in a sheet, pinning any sent recording to
-  /// this entry's day rather than today's date.
+  /// Opens the recording controls in a sheet; a sent recording is folded
+  /// into this same entry (merged transcript/analysis) rather than creating
+  /// a separate one, so we stay on this screen afterwards.
   Future<void> _addRecording(JournalEntry entry) async {
     await showModalBottomSheet(
       context: context,
@@ -109,11 +111,8 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
         padding: EdgeInsets.fromLTRB(
             32, 32, 32, MediaQuery.of(sheetContext).viewInsets.bottom + 32),
         child: RecordingControls(
-          day: entry.day,
-          onSent: () {
-            Navigator.pop(sheetContext);
-            if (mounted) Navigator.pop(context);
-          },
+          appendTo: entry,
+          onSent: () => Navigator.pop(sheetContext),
         ),
       ),
     );
@@ -212,7 +211,8 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
         ),
         const SizedBox(height: 28),
 
-        // Audio playback (unavailable once the audio has been discarded)
+        // Audio playback — one row per recording (unavailable once the
+        // audio has been discarded).
         if (entry.audioDeleted)
           Row(
             children: [
@@ -223,26 +223,39 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
             ],
           )
         else
-          Row(
-            children: [
-              GestureDetector(
-                onTap: () => _togglePlay(entry),
-                behavior: HitTestBehavior.opaque,
-                child: Container(
-                  width: 56,
-                  height: 56,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    border: Border.all(color: primary.withValues(alpha: 0.4)),
+          for (var i = 0; i < entry.audioFileNames.length; i++)
+            Padding(
+              padding: EdgeInsets.only(
+                  bottom: i == entry.audioFileNames.length - 1 ? 0 : 16),
+              child: Row(
+                children: [
+                  GestureDetector(
+                    onTap: () => _togglePlay(entry, i),
+                    behavior: HitTestBehavior.opaque,
+                    child: Container(
+                      width: 56,
+                      height: 56,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        border:
+                            Border.all(color: primary.withValues(alpha: 0.4)),
+                      ),
+                      child: Icon(
+                          _playingIndex == i
+                              ? Icons.pause
+                              : Icons.play_arrow,
+                          color: primary),
+                    ),
                   ),
-                  child: Icon(_playing ? Icons.pause : Icons.play_arrow,
-                      color: primary),
-                ),
+                  const SizedBox(width: 16),
+                  Text(
+                      entry.audioFileNames.length > 1
+                          ? 'Aufnahme ${i + 1}'
+                          : 'Aufnahme',
+                      style: TEXT_STYLE_STATUS),
+                ],
               ),
-              const SizedBox(width: 16),
-              Text('Aufnahme', style: TEXT_STYLE_STATUS),
-            ],
-          ),
+            ),
         const SizedBox(height: 32),
 
         if (analyzing)

@@ -36,6 +36,10 @@ Aufgaben:
 
 Wenn die Aufnahme leer oder unverständlich ist, gib einen leeren transcript,
 eine kurze Erklärung als summary, moodScore 5.0 und neutrale Werte zurück.
+
+Falls mehrere Audiodateien angehängt sind, gehören sie alle zum selben Tag und
+wurden nacheinander aufgenommen. Transkribiere sie in der gegebenen
+Reihenfolge und behandle sie inhaltlich als einen zusammenhängenden Eintrag.
 ''';
 
   /// Text-only variant: used when the audio has already been discarded and only
@@ -94,27 +98,30 @@ Transkript:
     ],
   };
 
-  /// Analyse [audioFile]. [apiKey] must be a valid Generative Language API key.
+  /// Analyse one or more [audioFiles] (in chronological order) as a single
+  /// entry. [apiKey] must be a valid Generative Language API key.
   Future<AnalysisResult> analyze({
-    required File audioFile,
+    required List<File> audioFiles,
     required String apiKey,
   }) async {
     if (apiKey.trim().isEmpty) {
       throw GeminiException('Kein Gemini API-Key hinterlegt.');
     }
-    if (!await audioFile.exists()) {
-      throw GeminiException('Audiodatei nicht gefunden.');
+    for (final file in audioFiles) {
+      if (!await file.exists()) {
+        throw GeminiException('Audiodatei nicht gefunden.');
+      }
     }
 
-    final bytes = await audioFile.readAsBytes();
     return _generate(apiKey, [
       {'text': _prompt},
-      {
-        'inline_data': {
-          'mime_type': 'audio/wav',
-          'data': base64Encode(bytes),
+      for (final file in audioFiles)
+        {
+          'inline_data': {
+            'mime_type': 'audio/wav',
+            'data': base64Encode(await file.readAsBytes()),
+          },
         },
-      },
     ]);
   }
 

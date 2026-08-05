@@ -32,15 +32,12 @@ class JournalManager {
   }
 
   /// Creates a provisional (analyzing) entry immediately, then analyses it.
-  /// [day] pins the entry to a specific day (e.g. adding another recording
-  /// to an existing day) instead of the recording's own date.
-  Future<void> createFromAudio(RecordingResult rec, {DateTime? day}) async {
+  Future<void> createFromAudio(RecordingResult rec) async {
     final entry = JournalEntry(
       id: rec.id,
       createdAt: rec.createdAt,
-      day: day ??
-          DateTime(rec.createdAt.year, rec.createdAt.month, rec.createdAt.day),
-      audioFileName: rec.fileName,
+      day: DateTime(rec.createdAt.year, rec.createdAt.month, rec.createdAt.day),
+      audioFileNames: [rec.fileName],
       status: EntryStatus.analyzing,
     );
     await _repo.upsert(entry);
@@ -57,6 +54,57 @@ class JournalManager {
       ..latitude = loc.latitude
       ..longitude = loc.longitude
       ..place = loc.place;
+    await _repo.upsert(entry);
+    _refresh();
+  }
+
+  /// Adds another recording to an existing entry instead of creating a
+  /// separate one for the same day. Only the new snippet is sent to Gemini
+  /// for transcription — the existing transcript is already known and isn't
+  /// re-transcribed — then summary/mood/tags are recomputed from the merged
+  /// text. The recording is kept as its own audio file alongside the
+  /// entry's other ones (unless the entry's audio was already discarded, in
+  /// which case the new snippet's audio is dropped too, once transcribed).
+  Future<void> appendRecording(JournalEntry entry, RecordingResult rec) async {
+    entry.status = EntryStatus.analyzing;
+    entry.errorMessage = null;
+    await _repo.upsert(entry);
+    _refresh();
+
+    try {
+      final apiKey = await _secure.getApiKey() ?? '';
+      final partial = await _gemini.analyze(
+        audioFiles: [File(_repo.audioPath(rec.fileName))],
+        apiKey: apiKey,
+      );
+      entry.transcript = [entry.transcript, partial.transcript]
+          .where((t) => t != null && t.isNotEmpty)
+          .join('\n\n');
+
+      if (entry.audioDeleted) {
+        await _repo.deleteAudioFile(rec.fileName);
+      } else {
+        entry.audioFileNames.add(rec.fileName);
+      }
+
+      final result =
+          await _gemini.analyzeText(transcript: entry.transcript!, apiKey: apiKey);
+      entry
+        ..summary = result.summary
+        ..moodLabel = result.moodLabel
+        ..moodScore = result.moodScore
+        ..dimensions = result.dimensions
+        ..tags = result.tags
+        ..analysisModel = kGeminiModel
+        ..analysisVersion = kAnalysisVersion
+        ..errorMessage = null
+        ..status = EntryStatus.ready;
+      await _maybeDiscardAudio(entry);
+    } catch (e) {
+      entry
+        ..status = EntryStatus.failed
+        ..errorMessage = e.toString();
+    }
     await _repo.upsert(entry);
     _refresh();
   }
@@ -81,7 +129,9 @@ class JournalManager {
               apiKey: apiKey,
             )
           : await _gemini.analyze(
-              audioFile: File(_repo.audioPath(entry.audioFileName)),
+              audioFiles: entry.audioFileNames
+                  .map((f) => File(_repo.audioPath(f)))
+                  .toList(),
               apiKey: apiKey,
             );
       entry
@@ -112,6 +162,7 @@ class JournalManager {
     if (!_storage.getDeleteAudioAfterTranscription()) return;
     await _repo.discardAudio(entry);
     entry.audioDeleted = true;
+    entry.audioFileNames = [];
   }
 
   /// Soft-delete: moves an entry to the trash (recoverable). Marks it deleted
