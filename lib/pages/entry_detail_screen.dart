@@ -144,26 +144,7 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
                 }
                 return const SizedBox.shrink();
               }
-              final e = entry;
-              return Stack(
-                children: [
-                  _content(e),
-                  Positioned(
-                    top: 8,
-                    right: 16,
-                    child: IconButton(
-                      onPressed: () => _addRecording(e),
-                      icon: Icon(
-                        Icons.mic_none,
-                        color: Theme.of(context)
-                            .colorScheme
-                            .primary
-                            .withValues(alpha: 0.6),
-                      ),
-                    ),
-                  ),
-                ],
-              );
+              return _content(entry);
             },
           ),
         ),
@@ -179,17 +160,40 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
       padding: const EdgeInsets.fromLTRB(32, 24, 32, 48),
       children: [
         // Tap the date to move the entry to another day (backdating).
-        GestureDetector(
-          onTap: () => _pickDay(entry),
-          behavior: HitTestBehavior.opaque,
-          child: Row(
-            children: [
-              Text(formatLongDate(entry.day), style: TEXT_STYLE_TITLE),
-              const SizedBox(width: 10),
-              Icon(Icons.edit_calendar_outlined,
-                  size: 18, color: primary.withValues(alpha: 0.3)),
-            ],
-          ),
+        // The mic circle starts another recording, kept on this same day.
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Expanded(
+              child: GestureDetector(
+                onTap: () => _pickDay(entry),
+                behavior: HitTestBehavior.opaque,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(formatLongDate(entry.day), style: TEXT_STYLE_TITLE),
+                    const SizedBox(width: 10),
+                    Icon(Icons.edit_calendar_outlined,
+                        size: 18, color: primary.withValues(alpha: 0.3)),
+                  ],
+                ),
+              ),
+            ),
+            GestureDetector(
+              onTap: () => _addRecording(entry),
+              behavior: HitTestBehavior.opaque,
+              child: Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(color: primary.withValues(alpha: 0.4)),
+                ),
+                child: Icon(Icons.mic_none,
+                    size: 18, color: primary.withValues(alpha: 0.6)),
+              ),
+            ),
+          ],
         ),
         const SizedBox(height: 16),
 
