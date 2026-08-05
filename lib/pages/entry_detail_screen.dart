@@ -6,6 +6,7 @@ import 'package:mars_log/domain/mood.dart';
 import 'package:mars_log/logic/journal_manager.dart';
 import 'package:mars_log/pages/widgets/confirm_dialog.dart';
 import 'package:mars_log/pages/widgets/double_tap_theme_toggle.dart';
+import 'package:mars_log/pages/widgets/recording_controls.dart';
 import 'package:mars_log/services/service_locator.dart';
 import 'package:mars_log/theme/theme_constants.dart';
 
@@ -98,6 +99,26 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
     if (result != null) await _journal.setPlace(entry, result);
   }
 
+  /// Opens the recording controls in a sheet, pinning any sent recording to
+  /// this entry's day rather than today's date.
+  Future<void> _addRecording(JournalEntry entry) async {
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (sheetContext) => Padding(
+        padding: EdgeInsets.fromLTRB(
+            32, 32, 32, MediaQuery.of(sheetContext).viewInsets.bottom + 32),
+        child: RecordingControls(
+          day: entry.day,
+          onSent: () {
+            Navigator.pop(sheetContext);
+            if (mounted) Navigator.pop(context);
+          },
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return DoubleTapThemeToggle(
@@ -163,6 +184,22 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
                   size: 16, color: primary.withValues(alpha: 0.4)),
               const SizedBox(width: 6),
               Text(_placeLabel(entry), style: TEXT_STYLE_STATUS),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+
+        // Add another recording, kept on this same day.
+        GestureDetector(
+          onTap: () => _addRecording(entry),
+          behavior: HitTestBehavior.opaque,
+          child: Row(
+            children: [
+              Icon(Icons.mic_none,
+                  size: 16, color: primary.withValues(alpha: 0.4)),
+              const SizedBox(width: 6),
+              Text('Weitere Aufnahme für diesen Tag',
+                  style: TEXT_STYLE_STATUS),
             ],
           ),
         ),

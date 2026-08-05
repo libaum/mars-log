@@ -42,6 +42,19 @@ class JournalRepository {
     } catch (_) {
       // Corrupt index → start empty rather than crash. Audio files survive.
     }
+    await _purgeOrphanedAudio();
+  }
+
+  /// Deletes audio files that no entry points to — e.g. a recording whose app
+  /// process died mid-way (killed, crashed) before an entry was ever created.
+  Future<void> _purgeOrphanedAudio() async {
+    final known = _entries.map((e) => e.audioFileName).toSet();
+    final dir = Directory(audioDirPath);
+    await for (final file in dir.list()) {
+      if (file is! File) continue;
+      final name = file.uri.pathSegments.last;
+      if (!known.contains(name)) await file.delete();
+    }
   }
 
   String get _indexPath => '${_docsDir.path}/$_indexFileName';

@@ -32,11 +32,14 @@ class JournalManager {
   }
 
   /// Creates a provisional (analyzing) entry immediately, then analyses it.
-  Future<void> createFromAudio(RecordingResult rec) async {
+  /// [day] pins the entry to a specific day (e.g. adding another recording
+  /// to an existing day) instead of the recording's own date.
+  Future<void> createFromAudio(RecordingResult rec, {DateTime? day}) async {
     final entry = JournalEntry(
       id: rec.id,
       createdAt: rec.createdAt,
-      day: DateTime(rec.createdAt.year, rec.createdAt.month, rec.createdAt.day),
+      day: day ??
+          DateTime(rec.createdAt.year, rec.createdAt.month, rec.createdAt.day),
       audioFileName: rec.fileName,
       status: EntryStatus.analyzing,
     );

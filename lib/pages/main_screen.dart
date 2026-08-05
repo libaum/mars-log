@@ -1,13 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:mars_log/domain/journal_entry.dart';
 import 'package:mars_log/logic/journal_manager.dart';
-import 'package:mars_log/logic/recording_manager.dart';
 import 'package:mars_log/pages/entry_detail_screen.dart';
 import 'package:mars_log/pages/settings_screen.dart';
 import 'package:mars_log/pages/widgets/confirm_dialog.dart';
 import 'package:mars_log/pages/widgets/double_tap_theme_toggle.dart';
 import 'package:mars_log/pages/widgets/entry_tile.dart';
-import 'package:mars_log/pages/widgets/record_button.dart';
+import 'package:mars_log/pages/widgets/recording_controls.dart';
 import 'package:mars_log/services/service_locator.dart';
 import 'package:mars_log/theme/theme_constants.dart';
 
@@ -19,41 +18,7 @@ class MainScreen extends StatefulWidget {
 }
 
 class _MainScreenState extends State<MainScreen> {
-  final _recording = getIt<RecordingManager>();
   final _journal = getIt<JournalManager>();
-
-  /// Starts when idle, pauses when recording, resumes when paused.
-  Future<void> _onCircleTap() async {
-    if (_recording.pausedNotifier.value) {
-      await _recording.resume();
-    } else if (_recording.recordingNotifier.value) {
-      await _recording.pause();
-    } else {
-      final started = await _recording.start();
-      if (!started && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Mikrofon-Zugriff wird benötigt.')),
-        );
-      }
-    }
-  }
-
-  Future<void> _cancelRecording() async {
-    final confirmed = await showConfirmDialog(
-      context,
-      title: 'Aufnahme verwerfen?',
-      confirmLabel: 'Verwerfen',
-    );
-    if (confirmed) await _recording.cancel();
-  }
-
-  Future<void> _sendRecording() async {
-    final result = await _recording.stop();
-    if (result != null) {
-      // Fire-and-forget: the manager flips the entry to ready/failed itself.
-      _journal.createFromAudio(result);
-    }
-  }
 
   void _openSettings() {
     Navigator.push(
@@ -83,11 +48,7 @@ class _MainScreenState extends State<MainScreen> {
                   padding: const EdgeInsets.only(top: 56, bottom: 28),
                   child: Column(
                     children: [
-                      RecordButton(
-                        onCircleTap: _onCircleTap,
-                        onCancel: _cancelRecording,
-                        onSend: _sendRecording,
-                      ),
+                      const RecordingControls(),
                     ],
                   ),
                 ),
