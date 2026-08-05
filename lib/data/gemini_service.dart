@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:http/http.dart' as http;
@@ -152,11 +153,15 @@ Transkript:
 
     late final http.Response res;
     try {
-      res = await http.post(
-        uri,
-        headers: {'Content-Type': 'application/json'},
-        body: body,
-      );
+      res = await http
+          .post(
+            uri,
+            headers: {'Content-Type': 'application/json'},
+            body: body,
+          )
+          .timeout(const Duration(seconds: 90));
+    } on TimeoutException {
+      throw GeminiException('Zeitüberschreitung bei der Gemini-Anfrage.');
     } catch (e) {
       throw GeminiException('Netzwerkfehler: $e');
     }

@@ -22,13 +22,12 @@ class _MainScreenState extends State<MainScreen> {
   final _recording = getIt<RecordingManager>();
   final _journal = getIt<JournalManager>();
 
-  Future<void> _toggleRecording() async {
-    if (_recording.recordingNotifier.value) {
-      final result = await _recording.stop();
-      if (result != null) {
-        // Fire-and-forget: the manager flips the entry to ready/failed itself.
-        _journal.createFromAudio(result);
-      }
+  /// Starts when idle, pauses when recording, resumes when paused.
+  Future<void> _onCircleTap() async {
+    if (_recording.pausedNotifier.value) {
+      await _recording.resume();
+    } else if (_recording.recordingNotifier.value) {
+      await _recording.pause();
     } else {
       final started = await _recording.start();
       if (!started && mounted) {
@@ -36,6 +35,23 @@ class _MainScreenState extends State<MainScreen> {
           const SnackBar(content: Text('Mikrofon-Zugriff wird benötigt.')),
         );
       }
+    }
+  }
+
+  Future<void> _cancelRecording() async {
+    final confirmed = await showConfirmDialog(
+      context,
+      title: 'Aufnahme verwerfen?',
+      confirmLabel: 'Verwerfen',
+    );
+    if (confirmed) await _recording.cancel();
+  }
+
+  Future<void> _sendRecording() async {
+    final result = await _recording.stop();
+    if (result != null) {
+      // Fire-and-forget: the manager flips the entry to ready/failed itself.
+      _journal.createFromAudio(result);
     }
   }
 
@@ -69,7 +85,11 @@ class _MainScreenState extends State<MainScreen> {
                     children: [
                       Text('Mars Log', style: TEXT_STYLE_STATUS),
                       const SizedBox(height: 28),
-                      RecordButton(onToggle: _toggleRecording),
+                      RecordButton(
+                        onCircleTap: _onCircleTap,
+                        onCancel: _cancelRecording,
+                        onSend: _sendRecording,
+                      ),
                     ],
                   ),
                 ),
