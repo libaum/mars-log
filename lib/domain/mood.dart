@@ -19,6 +19,9 @@ String formatLongDate(DateTime d) => '${d.day}. ${_months[d.month - 1]} ${d.year
 /// "10. Juli"
 String formatShortDate(DateTime d) => '${d.day}. ${_months[d.month - 1]}';
 
+/// "Juli 2026"
+String formatMonthYear(DateTime d) => '${_months[d.month - 1]} ${d.year}';
+
 /// Relative label for recent days, else short date.
 String formatRelativeDate(DateTime day) {
   final now = DateTime.now();

@@ -3,6 +3,7 @@ import 'package:mars_log/domain/journal_entry.dart';
 import 'package:mars_log/logic/journal_manager.dart';
 import 'package:mars_log/pages/entry_detail_screen.dart';
 import 'package:mars_log/pages/settings_screen.dart';
+import 'package:mars_log/pages/stats_screen.dart';
 import 'package:mars_log/pages/widgets/confirm_dialog.dart';
 import 'package:mars_log/pages/widgets/double_tap_theme_toggle.dart';
 import 'package:mars_log/pages/widgets/entry_tile.dart';
@@ -27,6 +28,20 @@ class _MainScreenState extends State<MainScreen> {
     );
   }
 
+  void _openStats() {
+    Navigator.push(context, _slideDownRoute(const StatsScreen()));
+  }
+
+  Route _slideDownRoute(Widget page) => PageRouteBuilder(
+        transitionDuration: const Duration(milliseconds: 260),
+        pageBuilder: (_, _, _) => page,
+        transitionsBuilder: (_, animation, _, child) => SlideTransition(
+          position: Tween<Offset>(begin: const Offset(0, -1), end: Offset.zero)
+              .animate(CurvedAnimation(parent: animation, curve: Curves.easeOutCubic)),
+          child: child,
+        ),
+      );
+
   void _openEntry(JournalEntry entry) {
     Navigator.push(
       context,
@@ -43,12 +58,16 @@ class _MainScreenState extends State<MainScreen> {
             children: [
               GestureDetector(
                 onLongPress: _openSettings,
+                onVerticalDragEnd: (details) {
+                  if ((details.primaryVelocity ?? 0) > 250) _openStats();
+                },
                 behavior: HitTestBehavior.opaque,
-                child: Padding(
+                child: Container(
+                  width: double.infinity,
                   padding: const EdgeInsets.only(top: 56, bottom: 28),
-                  child: Column(
+                  child: const Column(
                     children: [
-                      const RecordingControls(),
+                      RecordingControls(),
                     ],
                   ),
                 ),

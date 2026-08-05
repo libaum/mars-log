@@ -60,6 +60,27 @@ Aufgaben:
 Transkript:
 ''';
 
+  /// Used for the on-demand monthly AI review: takes the month's per-entry
+  /// summaries (chronological) and writes a short first-person recap.
+  static const _promptMonthReview = '''
+Du bist der Analyse-Assistent einer Sprach-Tagebuch-App. Unten stehen die
+Kurzzusammenfassungen aller Tagebucheinträge eines Monats, chronologisch
+geordnet. Schreibe daraus einen zusammenhängenden Rückblick auf den Monat aus
+der Ich-Perspektive (4–6 Sätze): wiederkehrende Themen, wie sich die Stimmung
+über den Monat entwickelt hat, was auffällt. Antworte ausschließlich mit dem
+geforderten JSON.
+
+Zusammenfassungen:
+''';
+
+  static final Map<String, Object> _reviewSchema = {
+    'type': 'OBJECT',
+    'properties': {
+      'review': {'type': 'STRING'},
+    },
+    'required': ['review'],
+  };
+
   static final Map<String, Object> _responseSchema = {
     'type': 'OBJECT',
     'properties': {
@@ -141,9 +162,44 @@ Transkript:
     ]);
   }
 
+  /// On-demand monthly recap from a chronological list of entry summaries.
+  Future<String> summarizeMonth({
+    required List<String> summaries,
+    required String apiKey,
+  }) async {
+    if (apiKey.trim().isEmpty) {
+      throw GeminiException('Kein Gemini API-Key hinterlegt.');
+    }
+    if (summaries.isEmpty) {
+      throw GeminiException('Keine Einträge für diesen Monat.');
+    }
+    final body = summaries.map((s) => '- $s').join('\n');
+    final data = await _generateJson(
+      apiKey,
+      [
+        {'text': '$_promptMonthReview$body'},
+      ],
+      _reviewSchema,
+    );
+    final review = (data['review'] as String?)?.trim() ?? '';
+    if (review.isEmpty) {
+      throw GeminiException('Gemini lieferte keinen Rückblick.');
+    }
+    return review;
+  }
+
   Future<AnalysisResult> _generate(
     String apiKey,
     List<Map<String, Object>> parts,
+  ) async {
+    final data = await _generateJson(apiKey, parts, _responseSchema);
+    return _toAnalysisResult(data);
+  }
+
+  Future<Map<String, dynamic>> _generateJson(
+    String apiKey,
+    List<Map<String, Object>> parts,
+    Map<String, Object> schema,
   ) async {
     final uri = Uri.parse('$_endpoint/$kGeminiModel:generateContent?key=$apiKey');
 
@@ -153,7 +209,7 @@ Transkript:
       ],
       'generationConfig': {
         'responseMimeType': 'application/json',
-        'responseSchema': _responseSchema,
+        'responseSchema': schema,
         'temperature': 0.4,
       },
     });
@@ -177,7 +233,7 @@ Transkript:
       throw GeminiException(_errorFrom(res));
     }
 
-    return _parse(res.body);
+    return _extractJson(res.body);
   }
 
   String _errorFrom(http.Response res) {
@@ -188,7 +244,7 @@ Transkript:
     return 'Gemini-Fehler (HTTP ${res.statusCode}).';
   }
 
-  AnalysisResult _parse(String responseBody) {
+  Map<String, dynamic> _extractJson(String responseBody) {
     try {
       final root = jsonDecode(responseBody) as Map<String, dynamic>;
       final candidates = root['candidates'] as List<dynamic>?;
@@ -200,29 +256,31 @@ Transkript:
       if (text == null || text.isEmpty) {
         throw GeminiException('Gemini lieferte keinen Inhalt.');
       }
-
-      final data = jsonDecode(text) as Map<String, dynamic>;
-      final rawDims = (data['dimensions'] as Map?) ?? {};
-      return AnalysisResult(
-        transcript: (data['transcript'] as String?)?.trim() ?? '',
-        summary: (data['summary'] as String?)?.trim() ?? '',
-        moodLabel: (data['moodLabel'] as String?)?.trim() ?? '',
-        moodScore: ((data['moodScore'] as num?)?.toDouble() ?? 5.0)
-            .clamp(0.0, 10.0),
-        dimensions: {
-          for (final d in kMoodDimensions)
-            d: ((rawDims[d] as num?)?.toInt() ?? 50).clamp(0, 100),
-        },
-        tags: (data['tags'] as List<dynamic>?)
-                ?.map((t) => t.toString())
-                .where((t) => t.isNotEmpty)
-                .toList() ??
-            const [],
-      );
+      return jsonDecode(text) as Map<String, dynamic>;
     } on GeminiException {
       rethrow;
     } catch (e) {
       throw GeminiException('Antwort konnte nicht gelesen werden: $e');
     }
+  }
+
+  AnalysisResult _toAnalysisResult(Map<String, dynamic> data) {
+    final rawDims = (data['dimensions'] as Map?) ?? {};
+    return AnalysisResult(
+      transcript: (data['transcript'] as String?)?.trim() ?? '',
+      summary: (data['summary'] as String?)?.trim() ?? '',
+      moodLabel: (data['moodLabel'] as String?)?.trim() ?? '',
+      moodScore: ((data['moodScore'] as num?)?.toDouble() ?? 5.0)
+          .clamp(0.0, 10.0),
+      dimensions: {
+        for (final d in kMoodDimensions)
+          d: ((rawDims[d] as num?)?.toInt() ?? 50).clamp(0, 100),
+      },
+      tags: (data['tags'] as List<dynamic>?)
+              ?.map((t) => t.toString())
+              .where((t) => t.isNotEmpty)
+              .toList() ??
+          const [],
+    );
   }
 }

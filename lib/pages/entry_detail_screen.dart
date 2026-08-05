@@ -5,6 +5,7 @@ import 'package:mars_log/domain/journal_entry.dart';
 import 'package:mars_log/domain/mood.dart';
 import 'package:mars_log/logic/journal_manager.dart';
 import 'package:mars_log/pages/widgets/confirm_dialog.dart';
+import 'package:mars_log/pages/widgets/dimension_bar.dart';
 import 'package:mars_log/pages/widgets/double_tap_theme_toggle.dart';
 import 'package:mars_log/pages/widgets/recording_controls.dart';
 import 'package:mars_log/services/service_locator.dart';
@@ -321,7 +322,11 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
       if (entry.dimensions != null) ...[
         Text('STIMMUNG', style: TEXT_STYLE_LABEL),
         const SizedBox(height: 12),
-        ...kMoodDimensions.map((d) => _dimensionBar(d, entry.dimensions![d] ?? 0, primary)),
+        ...kMoodDimensions.map((d) => DimensionBar(
+              dimensionKey: d,
+              value: entry.dimensions![d] ?? 0,
+              primary: primary,
+            )),
         const SizedBox(height: 28),
       ],
 
@@ -331,58 +336,6 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
         Text(entry.transcript!, style: TEXT_STYLE_BODY),
       ],
     ];
-  }
-
-  static const _dimensionLabels = {
-    'positivity': 'Positivität',
-    'energy': 'Energie',
-    'calm': 'Ruhe',
-    'stress': 'Stress',
-    'focus': 'Fokus',
-    'social': 'Sozialität',
-  };
-
-  Widget _dimensionBar(String key, int value, Color primary) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Row(
-        children: [
-          SizedBox(
-            width: 96,
-            child: Text(_dimensionLabels[key] ?? key, style: TEXT_STYLE_STATUS),
-          ),
-          Expanded(
-            child: Stack(
-              children: [
-                Container(
-                  height: 3,
-                  decoration: BoxDecoration(
-                    color: primary.withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-                FractionallySizedBox(
-                  widthFactor: (value / 100).clamp(0.0, 1.0),
-                  child: Container(
-                    height: 3,
-                    decoration: BoxDecoration(
-                      color: primary,
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 12),
-          SizedBox(
-            width: 28,
-            child: Text('$value',
-                textAlign: TextAlign.right, style: TEXT_STYLE_STATUS),
-          ),
-        ],
-      ),
-    );
   }
 
   Widget _actions(JournalEntry entry, bool analyzing) {

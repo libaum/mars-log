@@ -11,6 +11,7 @@ class LocalStorageService {
   static const _keyReminderMinutes = 'reminder_minutes';
   static const _keyDeleteAudioAfterTranscription =
       'delete_audio_after_transcription';
+  static const _keyMonthReviewPrefix = 'month_review_';
 
   final SharedPreferences _prefs;
 
@@ -55,4 +56,12 @@ class LocalStorageService {
       _prefs.getBool(_keyDeleteAudioAfterTranscription) ?? false;
   Future<void> setDeleteAudioAfterTranscription(bool v) =>
       _prefs.setBool(_keyDeleteAudioAfterTranscription, v);
+
+  /// Cached AI monthly recap text, keyed by "yyyy-M". Regenerated on demand
+  /// only (see StatsScreen) — this just avoids re-fetching when switching
+  /// months back and forth.
+  String? getMonthReview(String monthKey) =>
+      _prefs.getString('$_keyMonthReviewPrefix$monthKey');
+  Future<void> setMonthReview(String monthKey, String text) =>
+      _prefs.setString('$_keyMonthReviewPrefix$monthKey', text);
 }
