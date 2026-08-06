@@ -1,22 +1,25 @@
 import 'dart:io';
 import 'package:flutter/foundation.dart';
-import 'package:mars_log/data/gemini_service.dart';
+import 'package:mars_log/data/analysis_engine.dart';
+import 'package:mars_log/data/gemini_service.dart' show kAnalysisVersion;
 import 'package:mars_log/data/journal_repository.dart';
 import 'package:mars_log/data/local_storage_service.dart';
-import 'package:mars_log/data/secure_storage_service.dart';
+import 'package:mars_log/data/on_device_analysis_service.dart';
 import 'package:mars_log/domain/journal_entry.dart';
 import 'package:mars_log/logic/location_service.dart';
 import 'package:mars_log/logic/recording_manager.dart';
 import 'package:mars_log/services/service_locator.dart';
 
 /// Core state manager for the journal. Coordinates recording → entry creation →
-/// Gemini analysis, and exposes the live entry list to the UI.
+/// analysis, and exposes the live entry list to the UI. Analysis goes through
+/// whichever [AnalysisEngine] is currently selected in settings (cloud Gemini
+/// or, on the offline-analysis branch, on-device Whisper + Gemini Nano).
 class JournalManager {
   final _repo = getIt<JournalRepository>();
-  final _gemini = getIt<GeminiService>();
-  final _secure = getIt<SecureStorageService>();
   final _storage = getIt<LocalStorageService>();
   final _location = getIt<LocationService>();
+  final _cloud = getIt<CloudAnalysisEngine>();
+  final _onDevice = getIt<OnDeviceAnalysisEngine>();
 
   late final ValueNotifier<List<JournalEntry>> entriesNotifier;
   late final ValueNotifier<List<JournalEntry>> trashNotifier;
@@ -31,6 +34,10 @@ class JournalManager {
     trashNotifier.value = _repo.deletedEntries;
   }
 
+  /// The engine currently selected in settings (defaults to cloud).
+  AnalysisEngine _activeEngine() =>
+      _storage.getAnalysisEngine() == 'on_device' ? _onDevice : _cloud;
+
   /// Creates a provisional (analyzing) entry immediately, then analyses it.
   Future<void> createFromAudio(RecordingResult rec) async {
     final entry = JournalEntry(
@@ -43,7 +50,7 @@ class JournalManager {
     await _repo.upsert(entry);
     _refresh();
     await _attachLocation(entry);
-    await _analyze(entry);
+    await _analyze(entry, _activeEngine());
   }
 
   /// Best-effort: stamp the entry with where it was recorded. Silent on failure.
@@ -71,12 +78,10 @@ class JournalManager {
     await _repo.upsert(entry);
     _refresh();
 
+    final engine = _activeEngine();
     try {
-      final apiKey = await _secure.getApiKey() ?? '';
-      final partial = await _gemini.analyze(
-        audioFiles: [File(_repo.audioPath(rec.fileName))],
-        apiKey: apiKey,
-      );
+      final partial = await engine
+          .analyzeAudio([File(_repo.audioPath(rec.fileName))]);
       entry.transcript = [entry.transcript, partial.transcript]
           .where((t) => t != null && t.isNotEmpty)
           .join('\n\n');
@@ -87,15 +92,14 @@ class JournalManager {
         entry.audioFileNames.add(rec.fileName);
       }
 
-      final result =
-          await _gemini.analyzeText(transcript: entry.transcript!, apiKey: apiKey);
+      final result = await engine.analyzeText(entry.transcript!);
       entry
         ..summary = result.summary
         ..moodLabel = result.moodLabel
         ..moodScore = result.moodScore
         ..dimensions = result.dimensions
         ..tags = result.tags
-        ..analysisModel = kGeminiModel
+        ..analysisModel = engine.modelName
         ..analysisVersion = kAnalysisVersion
         ..errorMessage = null
         ..status = EntryStatus.ready;
@@ -109,30 +113,34 @@ class JournalManager {
     _refresh();
   }
 
-  /// Re-runs analysis on an existing entry; audio + previous data are kept
-  /// until the new result overwrites them.
-  Future<void> reanalyze(JournalEntry entry) async {
+  /// Re-runs analysis on an existing entry with the currently selected
+  /// engine; audio + previous data are kept until the new result overwrites
+  /// them.
+  Future<void> reanalyze(JournalEntry entry) => reanalyzeWith(
+        entry,
+        _activeEngine(),
+      );
+
+  /// Re-runs analysis with an explicitly chosen engine, regardless of the
+  /// global setting — lets the detail screen run the same entry through both
+  /// cloud and on-device for a direct comparison.
+  Future<void> reanalyzeWith(JournalEntry entry, AnalysisEngine engine) async {
     entry.status = EntryStatus.analyzing;
     entry.errorMessage = null;
     await _repo.upsert(entry);
     _refresh();
-    await _analyze(entry);
+    await _analyze(entry, engine);
   }
 
-  Future<void> _analyze(JournalEntry entry) async {
+  Future<void> _analyze(JournalEntry entry, AnalysisEngine engine) async {
     try {
-      final apiKey = await _secure.getApiKey() ?? '';
       // Once the audio is gone, the transcript is the only source to work from.
       final result = entry.audioDeleted
-          ? await _gemini.analyzeText(
-              transcript: entry.transcript ?? '',
-              apiKey: apiKey,
-            )
-          : await _gemini.analyze(
-              audioFiles: entry.audioFileNames
+          ? await engine.analyzeText(entry.transcript ?? '')
+          : await engine.analyzeAudio(
+              entry.audioFileNames
                   .map((f) => File(_repo.audioPath(f)))
                   .toList(),
-              apiKey: apiKey,
             );
       entry
         ..transcript = result.transcript
@@ -141,7 +149,7 @@ class JournalManager {
         ..moodScore = result.moodScore
         ..dimensions = result.dimensions
         ..tags = result.tags
-        ..analysisModel = kGeminiModel
+        ..analysisModel = engine.modelName
         ..analysisVersion = kAnalysisVersion
         ..errorMessage = null
         ..status = EntryStatus.ready;

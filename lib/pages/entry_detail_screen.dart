@@ -1,6 +1,8 @@
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
+import 'package:mars_log/data/analysis_engine.dart';
 import 'package:mars_log/data/journal_repository.dart';
+import 'package:mars_log/data/on_device_analysis_service.dart';
 import 'package:mars_log/domain/journal_entry.dart';
 import 'package:mars_log/domain/mood.dart';
 import 'package:mars_log/logic/journal_manager.dart';
@@ -24,9 +26,12 @@ class EntryDetailScreen extends StatefulWidget {
 class _EntryDetailScreenState extends State<EntryDetailScreen> {
   final _journal = getIt<JournalManager>();
   final _repo = getIt<JournalRepository>();
+  final _cloudEngine = getIt<CloudAnalysisEngine>();
+  final _onDeviceEngine = getIt<OnDeviceAnalysisEngine>();
   final _player = AudioPlayer();
   int? _playingIndex;
   bool _leaving = false;
+  AnalysisEngine? _reanalyzingWith;
 
   @override
   void initState() {
@@ -180,17 +185,27 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
               ),
             ),
             GestureDetector(
-              onTap: () => _addRecording(entry),
+              onTap: entry.status == EntryStatus.analyzing
+                  ? null
+                  : () => _addRecording(entry),
               behavior: HitTestBehavior.opaque,
               child: Container(
                 width: 40,
                 height: 40,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  border: Border.all(color: primary.withValues(alpha: 0.4)),
+                  border: Border.all(
+                      color: primary.withValues(
+                          alpha: entry.status == EntryStatus.analyzing
+                              ? 0.15
+                              : 0.4)),
                 ),
                 child: Icon(Icons.mic_none,
-                    size: 18, color: primary.withValues(alpha: 0.6)),
+                    size: 18,
+                    color: primary.withValues(
+                        alpha: entry.status == EntryStatus.analyzing
+                            ? 0.25
+                            : 0.6)),
               ),
             ),
           ],
@@ -335,34 +350,70 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
         const SizedBox(height: 10),
         Text(entry.transcript!, style: TEXT_STYLE_BODY),
       ],
+
+      if ((entry.analysisModel ?? '').isNotEmpty) ...[
+        const SizedBox(height: 16),
+        Text(entry.analysisModel!,
+            style: TEXT_STYLE_STATUS.copyWith(
+                color: primary.withValues(alpha: 0.4))),
+      ],
     ];
   }
 
   Widget _actions(JournalEntry entry, bool analyzing) {
-    return Row(
+    // Both engines can re-run from scratch with audio still around, and
+    // from the transcript alone once audio is discarded — offer them side
+    // by side either way so the same entry can be compared cloud vs.
+    // on-device.
+    void reanalyzeWith(AnalysisEngine engine) {
+      setState(() => _reanalyzingWith = engine);
+      _journal.reanalyzeWith(entry, engine);
+    }
+
+    final reanalyzeButtons = [
+      TextButton(
+        onPressed: analyzing ? null : () => reanalyzeWith(_cloudEngine),
+        child: Text(
+            analyzing && _reanalyzingWith == _cloudEngine
+                ? 'Analysiert …'
+                : 'Neu analysieren (Cloud)',
+            style: TEXT_STYLE_SETTING),
+      ),
+      TextButton(
+        onPressed: analyzing ? null : () => reanalyzeWith(_onDeviceEngine),
+        child: Text(
+            analyzing && _reanalyzingWith == _onDeviceEngine
+                ? 'Analysiert …'
+                : 'Neu analysieren (Gerät)',
+            style: TEXT_STYLE_SETTING),
+      ),
+    ];
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        TextButton(
-          onPressed: analyzing ? null : () => _journal.reanalyze(entry),
-          child: Text(analyzing ? 'Analysiert …' : 'Neu analysieren',
-              style: TEXT_STYLE_SETTING),
-        ),
-        const Spacer(),
-        TextButton(
-          onPressed: () async {
-            if (_leaving) return;
-            final ok = await showConfirmDialog(
-              context,
-              title: 'In den Papierkorb?',
-              message:
-                  'Du kannst den Eintrag im Papierkorb wiederherstellen.',
-            );
-            if (!ok || _leaving || !mounted) return;
-            _leaving = true;
-            _journal.delete(entry); // fire; the pop below is the only one
-            Navigator.pop(context);
-          },
-          child: Text('Löschen',
-              style: TEXT_STYLE_SETTING.copyWith(color: COLOR_SECONDARY)),
+        Wrap(spacing: 4, runSpacing: 4, children: reanalyzeButtons),
+        Row(
+          children: [
+            const Spacer(),
+            TextButton(
+              onPressed: () async {
+                if (_leaving) return;
+                final ok = await showConfirmDialog(
+                  context,
+                  title: 'In den Papierkorb?',
+                  message:
+                      'Du kannst den Eintrag im Papierkorb wiederherstellen.',
+                );
+                if (!ok || _leaving || !mounted) return;
+                _leaving = true;
+                _journal.delete(entry); // fire; the pop below is the only one
+                Navigator.pop(context);
+              },
+              child: Text('Löschen',
+                  style: TEXT_STYLE_SETTING.copyWith(color: COLOR_SECONDARY)),
+            ),
+          ],
         ),
       ],
     );

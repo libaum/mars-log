@@ -11,11 +11,13 @@ class SettingsManager {
 
   late final ValueNotifier<bool> pinEnabledNotifier;
   late final ValueNotifier<bool> biometricEnabledNotifier;
+  late final ValueNotifier<String> analysisEngineNotifier;
   final ValueNotifier<bool> hasApiKeyNotifier = ValueNotifier(false);
 
   SettingsManager() {
     pinEnabledNotifier = ValueNotifier(_storage.getPinEnabled());
     biometricEnabledNotifier = ValueNotifier(_storage.getBiometricEnabled());
+    analysisEngineNotifier = ValueNotifier(_storage.getAnalysisEngine());
     _initApiKey();
   }
 
@@ -46,5 +48,10 @@ class SettingsManager {
   Future<void> setBiometricEnabled(bool v) async {
     await _storage.setBiometricEnabled(v);
     biometricEnabledNotifier.value = v;
+  }
+
+  Future<void> setAnalysisEngine(String v) async {
+    await _storage.setAnalysisEngine(v);
+    analysisEngineNotifier.value = v;
   }
 }

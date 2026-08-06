@@ -1,8 +1,10 @@
 import 'package:get_it/get_it.dart';
+import 'package:mars_log/data/analysis_engine.dart';
 import 'package:mars_log/data/export_service.dart';
 import 'package:mars_log/data/gemini_service.dart';
 import 'package:mars_log/data/journal_repository.dart';
 import 'package:mars_log/data/local_storage_service.dart';
+import 'package:mars_log/data/on_device_analysis_service.dart';
 import 'package:mars_log/data/secure_storage_service.dart';
 import 'package:mars_log/logic/journal_manager.dart';
 import 'package:mars_log/logic/location_service.dart';
@@ -26,6 +28,9 @@ Future<void> setupServiceLocator() async {
   );
   getIt.registerSingleton<GeminiService>(GeminiService());
   getIt.registerSingleton<LocationService>(LocationService());
+
+  getIt.registerSingleton<CloudAnalysisEngine>(CloudAnalysisEngine());
+  getIt.registerSingleton<OnDeviceAnalysisEngine>(OnDeviceAnalysisEngine());
 
   getIt.registerSingleton<ThemeManager>(ThemeManager());
   getIt.registerSingleton<SettingsManager>(SettingsManager());

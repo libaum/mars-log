@@ -128,22 +128,45 @@ Zusammenfassungen:
     if (apiKey.trim().isEmpty) {
       throw GeminiException('Kein Gemini API-Key hinterlegt.');
     }
+    var totalBytes = 0;
     for (final file in audioFiles) {
       if (!await file.exists()) {
         throw GeminiException('Audiodatei nicht gefunden.');
       }
+      totalBytes += await file.length();
     }
 
-    return _generate(apiKey, [
-      {'text': _prompt},
-      for (final file in audioFiles)
-        {
-          'inline_data': {
-            'mime_type': 'audio/wav',
-            'data': base64Encode(await file.readAsBytes()),
+    return _generate(
+      apiKey,
+      [
+        {'text': _prompt},
+        for (final file in audioFiles)
+          {
+            'inline_data': {
+              'mime_type': _mimeTypeFor(file.path),
+              'data': base64Encode(await file.readAsBytes()),
+            },
           },
-        },
-    ]);
+      ],
+      timeout: _timeoutFor(totalBytes),
+    );
+  }
+
+  /// Older entries may still carry `.wav` recordings from before the
+  /// switch to AAC (`.m4a`), so the mime type is derived per file rather
+  /// than assumed.
+  String _mimeTypeFor(String path) =>
+      path.toLowerCase().endsWith('.wav') ? 'audio/wav' : 'audio/aac';
+
+  /// Upload of a large recording can dominate the request time on a slow
+  /// connection, so the timeout scales with audio size rather than being a
+  /// flat cutoff that a long recording can never finish within (90s was too
+  /// short for ~10 minutes of audio and always failed with a timeout).
+  /// Assumes a conservative 50 KB/s floor, plus headroom for processing,
+  /// capped so a broken request doesn't hang forever.
+  Duration _timeoutFor(int totalBytes) {
+    final seconds = 90 + totalBytes ~/ (50 * 1024);
+    return Duration(seconds: seconds.clamp(90, 300));
   }
 
   /// Re-analyse from the transcript alone (used when the audio was discarded).
@@ -190,17 +213,20 @@ Zusammenfassungen:
 
   Future<AnalysisResult> _generate(
     String apiKey,
-    List<Map<String, Object>> parts,
-  ) async {
-    final data = await _generateJson(apiKey, parts, _responseSchema);
+    List<Map<String, Object>> parts, {
+    Duration timeout = const Duration(seconds: 90),
+  }) async {
+    final data = await _generateJson(apiKey, parts, _responseSchema,
+        timeout: timeout);
     return _toAnalysisResult(data);
   }
 
   Future<Map<String, dynamic>> _generateJson(
     String apiKey,
     List<Map<String, Object>> parts,
-    Map<String, Object> schema,
-  ) async {
+    Map<String, Object> schema, {
+    Duration timeout = const Duration(seconds: 90),
+  }) async {
     final uri = Uri.parse('$_endpoint/$kGeminiModel:generateContent?key=$apiKey');
 
     final body = jsonEncode({
@@ -222,11 +248,11 @@ Zusammenfassungen:
             headers: {'Content-Type': 'application/json'},
             body: body,
           )
-          .timeout(const Duration(seconds: 90));
+          .timeout(timeout);
     } on TimeoutException {
       throw GeminiException('Zeitüberschreitung bei der Gemini-Anfrage.');
     } catch (e) {
-      throw GeminiException('Netzwerkfehler: $e');
+      throw GeminiException('Netzwerkfehler: ${_redactApiKey(e.toString())}');
     }
 
     if (res.statusCode != 200) {
@@ -235,6 +261,12 @@ Zusammenfassungen:
 
     return _extractJson(res.body);
   }
+
+  /// Network exceptions from the http package stringify the request URI,
+  /// which includes the API key as a query param — strip it before the
+  /// message is ever shown in the UI or persisted to an entry.
+  String _redactApiKey(String message) =>
+      message.replaceAll(RegExp(r'key=[^&\s]+'), 'key=REDACTED');
 
   String _errorFrom(http.Response res) {
     try {

@@ -43,11 +43,12 @@ class RecordingManager {
 
     await _rec.start(
       const RecordConfig(
-        encoder: AudioEncoder.wav,
+        encoder: AudioEncoder.aacLc,
+        bitRate: 64000,
         sampleRate: 16000,
         numChannels: 1,
       ),
-      path: _repo.audioPath('$_id.wav'),
+      path: _repo.audioPath('$_id.m4a'),
     );
 
     recordingNotifier.value = true;
@@ -95,7 +96,7 @@ class RecordingManager {
     }
     return RecordingResult(
       id: _id!,
-      fileName: '$_id.wav',
+      fileName: '$_id.m4a',
       createdAt: _recordingStartedAt!,
     );
   }

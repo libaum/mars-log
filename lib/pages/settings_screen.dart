@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:mars_log/data/export_service.dart';
 import 'package:mars_log/data/local_storage_service.dart';
+import 'package:mars_log/data/on_device_analysis_service.dart';
 import 'package:mars_log/domain/journal_entry.dart';
 import 'package:mars_log/logic/journal_manager.dart';
 import 'package:mars_log/logic/notification_manager.dart';
@@ -28,6 +29,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final _journal = getIt<JournalManager>();
   final _notifications = getIt<NotificationManager>();
   final _storage = getIt<LocalStorageService>();
+  final _onDevice = getIt<OnDeviceAnalysisEngine>();
+  bool _preparingModels = false;
 
   Future<void> _editApiKey() async {
     final current = await _settings.getApiKey() ?? '';
@@ -141,6 +144,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
     setState(() {});
   }
 
+  Future<void> _toggleAnalysisEngine(bool onDevice) async {
+    await _settings.setAnalysisEngine(onDevice ? 'on_device' : 'cloud');
+  }
+
+  Future<void> _prepareOnDeviceModels() async {
+    setState(() => _preparingModels = true);
+    try {
+      await _onDevice.ensureWhisperModelDownloaded();
+      final nanoOk = await _onDevice.isNanoAvailable();
+      _snack(
+        nanoOk
+            ? 'Whisper-Modell bereit, Gemini Nano verfügbar.'
+            : 'Whisper-Modell bereit, Gemini Nano ist auf diesem Gerät nicht verfügbar.',
+      );
+    } catch (e) {
+      _snack('Vorbereitung fehlgeschlagen: $e');
+    } finally {
+      if (mounted) setState(() => _preparingModels = false);
+    }
+  }
+
   Future<void> _pickReminderTime() async {
     final picked = await showTimePicker(
       context: context,
@@ -240,6 +264,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   _storage.getDeleteAudioAfterTranscription(),
                   () => _toggleDeleteAudio(
                     !_storage.getDeleteAudioAfterTranscription(),
+                  ),
+                ),
+                ValueListenableBuilder<String>(
+                  valueListenable: _settings.analysisEngineNotifier,
+                  builder: (context, engine, _) => Column(
+                    children: [
+                      _toggleRow(
+                        'Offline-Modus (Beta)',
+                        'Analyse lokal via Whisper + Gemini Nano statt Cloud — experimentell, braucht ein unterstütztes Gerät',
+                        engine == 'on_device',
+                        () => _toggleAnalysisEngine(engine != 'on_device'),
+                      ),
+                      if (engine == 'on_device')
+                        _actionRow(
+                          _preparingModels
+                              ? 'Modelle werden vorbereitet…'
+                              : 'Modelle vorbereiten',
+                          _preparingModels ? () {} : _prepareOnDeviceModels,
+                        ),
+                    ],
                   ),
                 ),
                 _actionRow('Export (share)', _doExport),

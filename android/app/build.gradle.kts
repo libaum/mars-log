@@ -18,8 +18,8 @@ android {
 
     defaultConfig {
         applicationId = "com.catchingclouds.marslog"
-        // local_auth / flutter_secure_storage need API 23+
-        minSdk = maxOf(flutter.minSdkVersion, 23)
+        // gemini_nano_android (offline-analysis branch) needs API 26+
+        minSdk = maxOf(flutter.minSdkVersion, 26)
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
