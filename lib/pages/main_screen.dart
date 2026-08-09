@@ -4,6 +4,7 @@ import 'package:mars_log/logic/journal_manager.dart';
 import 'package:mars_log/pages/entry_detail_screen.dart';
 import 'package:mars_log/pages/settings_screen.dart';
 import 'package:mars_log/pages/stats_screen.dart';
+import 'package:mars_log/pages/widgets/confirm_dialog.dart';
 import 'package:mars_log/pages/widgets/double_tap_theme_toggle.dart';
 import 'package:mars_log/pages/widgets/entry_tile.dart';
 import 'package:mars_log/pages/widgets/recording_controls.dart';
@@ -116,7 +117,15 @@ class _MainScreenState extends State<MainScreen> {
             final entry = entries[i];
             return SwipeToDelete(
               key: ValueKey(entry.id),
-              onDelete: () => _journal.delete(entry),
+              onDelete: () async {
+                final ok = await showConfirmDialog(
+                  context,
+                  title: 'In den Papierkorb?',
+                  message:
+                      'Du kannst den Eintrag im Papierkorb wiederherstellen.',
+                );
+                if (ok) _journal.delete(entry);
+              },
               child: EntryTile(entry: entry, onTap: () => _openEntry(entry)),
             );
           },
