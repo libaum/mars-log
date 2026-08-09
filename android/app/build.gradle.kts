@@ -7,7 +7,9 @@ plugins {
 android {
     namespace = "com.catchingclouds.marslog"
     compileSdk = flutter.compileSdkVersion
-    ndkVersion = flutter.ndkVersion
+    // Pinned to the highest version any plugin requires (whisper_ggml) to
+    // silence the NDK-mismatch warning; NDKs are backward compatible.
+    ndkVersion = "29.0.13113456"
 
     compileOptions {
         // flutter_local_notifications requires core library desugaring
