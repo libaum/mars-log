@@ -64,7 +64,7 @@ lib/
 ## Key Interactions
 - **Tap** the circle → start/stop recording (entry then analyzes itself)
 - **Tap** a timeline row → entry detail (playback, location label, transcript, summary, mood, tags, re-analyze, delete). Tap the date to backdate, tap the location to set/adjust the label.
-- **Swipe left** on a row → delete (asks first, then moves to the trash)
+- **Swipe left** on a row → delete, moves to the trash (same gesture as mars_thoughts: arms with a haptic once pulled to the stop, red reveal, no confirm dialog)
 - **Long-press** the header/record area → Settings
 - **Double-tap** anywhere → toggle theme
 

@@ -4,10 +4,10 @@ import 'package:mars_log/logic/journal_manager.dart';
 import 'package:mars_log/pages/entry_detail_screen.dart';
 import 'package:mars_log/pages/settings_screen.dart';
 import 'package:mars_log/pages/stats_screen.dart';
-import 'package:mars_log/pages/widgets/confirm_dialog.dart';
 import 'package:mars_log/pages/widgets/double_tap_theme_toggle.dart';
 import 'package:mars_log/pages/widgets/entry_tile.dart';
 import 'package:mars_log/pages/widgets/recording_controls.dart';
+import 'package:mars_log/pages/widgets/swipe_to_delete.dart';
 import 'package:mars_log/services/service_locator.dart';
 import 'package:mars_log/theme/theme_constants.dart';
 
@@ -114,17 +114,9 @@ class _MainScreenState extends State<MainScreen> {
           ),
           itemBuilder: (context, i) {
             final entry = entries[i];
-            return Dismissible(
+            return SwipeToDelete(
               key: ValueKey(entry.id),
-              direction: DismissDirection.endToStart,
-              confirmDismiss: (_) => showConfirmDialog(
-                context,
-                title: 'In den Papierkorb?',
-                message:
-                    'Du kannst den Eintrag im Papierkorb wiederherstellen.',
-              ),
-              onDismissed: (_) => _journal.delete(entry),
-              background: const SizedBox.shrink(),
+              onDelete: () => _journal.delete(entry),
               child: EntryTile(entry: entry, onTap: () => _openEntry(entry)),
             );
           },

@@ -8,6 +8,7 @@ const COLOR_DARK_BACKGROUND = Colors.black;
 const COLOR_DARK_PRIMARY = Colors.white;
 
 const COLOR_SECONDARY = Color(0xFF888888);
+const COLOR_DELETE = Color(0xFFC9184A);
 
 /// Font
 const FONT_FAMILY = 'Outfit';
