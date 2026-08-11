@@ -52,7 +52,7 @@ class AboutScreen extends StatelessWidget {
                   const SizedBox(height: 32),
                   // About Mars — shared philosophy, identical across all apps.
                   const Text(
-                    'Mars — Minimalist And Really Simple. A growing family of small, calm tools built around one idea: solve one problem well, and never fight for your attention. Created by one person out of passion and conviction. Forever open source. No ads. No tracking.',
+                    'Mars — Minimalist And Really Simple. A growing family of small, calm tools built around one idea: solve one problem well, and never fight for your attention. No ads, no tracking, nothing built to keep you hooked. Made by one person, out of conviction — tools that work for you, not on you.',
                     style: TextStyle(fontSize: 15, fontWeight: FontWeight.w300, color: COLOR_SECONDARY, height: 1.7),
                   ),
                   const SizedBox(height: 40),
