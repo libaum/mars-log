@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:mars_log/theme/theme_constants.dart';
@@ -50,10 +51,17 @@ class _SwipeToDeleteState extends State<SwipeToDelete> {
     return LayoutBuilder(
       builder: (context, constraints) {
         _maxReveal = constraints.maxWidth * _maxRevealFraction;
-        return GestureDetector(
+        return RawGestureDetector(
           behavior: HitTestBehavior.opaque,
-          onHorizontalDragUpdate: _onUpdate,
-          onHorizontalDragEnd: _onEnd,
+          gestures: <Type, GestureRecognizerFactory>{
+            _RowSwipeDragRecognizer:
+                GestureRecognizerFactoryWithHandlers<_RowSwipeDragRecognizer>(
+                  () => _RowSwipeDragRecognizer(),
+                  (instance) => instance
+                    ..onUpdate = _onUpdate
+                    ..onEnd = _onEnd,
+                ),
+          },
           child: Stack(
             children: [
               if (_drag != 0)
@@ -86,5 +94,39 @@ class _SwipeToDeleteState extends State<SwipeToDelete> {
         );
       },
     );
+  }
+}
+
+/// A horizontal-drag recognizer that only commits the row swipe once the
+/// finger has moved clearly and mostly sideways. A plain [GestureDetector]'s
+/// horizontal-drag handlers react to the smallest sideways wobble during an
+/// otherwise vertical list scroll, which reads as jitter; this mirrors
+/// mars_thoughts' `_RowSwipeDragRecognizer` instead.
+class _RowSwipeDragRecognizer extends HorizontalDragGestureRecognizer {
+  static const _slop = 20.0;
+
+  Offset? _origin;
+
+  @override
+  void addAllowedPointer(PointerDownEvent event) {
+    _origin = event.position;
+    super.addAllowedPointer(event);
+  }
+
+  @override
+  void handleEvent(PointerEvent event) {
+    if (event is PointerMoveEvent && _origin != null) {
+      final delta = event.position - _origin!;
+      if (delta.dx.abs() > _slop || delta.dy.abs() > _slop) {
+        if (delta.dx.abs() > delta.dy.abs() * 1.5) {
+          resolve(GestureDisposition.accepted);
+        } else {
+          resolve(GestureDisposition.rejected);
+          stopTrackingPointer(event.pointer);
+          return;
+        }
+      }
+    }
+    super.handleEvent(event);
   }
 }
