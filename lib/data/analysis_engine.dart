@@ -25,8 +25,10 @@ class CloudAnalysisEngine implements AnalysisEngine {
   final _gemini = getIt<GeminiService>();
   final _secure = getIt<SecureStorageService>();
 
+  /// The chain may fall back to a weaker model when the preferred one is rate
+  /// limited, so the name reported is the model that actually answered last.
   @override
-  String get modelName => kGeminiModel;
+  String get modelName => _gemini.lastUsedModel;
 
   @override
   Future<AnalysisResult> analyzeAudio(List<File> audioFiles) async {

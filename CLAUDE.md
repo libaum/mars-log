@@ -33,7 +33,7 @@ Managers expose state via `ValueNotifier`; UI subscribes with `ValueListenableBu
 | `JournalRepository` | Owns `entries.json` + `audio/` in app documents dir; in-memory list, persisted on every mutation. Delete is a soft-delete (`deletedAt`); trashed entries are purged on load after `trashRetention` (30 days) |
 | `LocalStorageService` | SharedPreferences: theme + lock flags + analysis version + reminder + "delete audio after transcription" flag (non-sensitive) |
 | `SecureStorageService` | flutter_secure_storage: Gemini API key + PIN hash (sha256) |
-| `GeminiService` | `generateContent`: `analyze` (audio in) or `analyzeText` (transcript in when audio is gone) → structured JSON out |
+| `GeminiService` | `generateContent`: `analyze` (audio in) or `analyzeText` (transcript in when audio is gone) → structured JSON out. Walks `kGeminiModels` best-first (3.7 Flash → 3.5 Flash → 2.5 Flash → 3.5 Flash Lite), falling through to the next model on 429/503/404; `lastUsedModel` is what gets stored as `analysisModel` |
 | `ExportService` | Zip export (`entries.json` + audio) via share sheet; import + merge by id |
 | `RecordingManager` | Microphone lifecycle; records WAV 16 kHz mono; timer |
 | `LocationService` | Best-effort GPS + reverse-geocoded label for a new entry; silent/nullable, never throws |

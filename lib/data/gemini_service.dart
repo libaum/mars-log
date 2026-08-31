@@ -6,11 +6,33 @@ import 'package:mars_log/domain/journal_entry.dart';
 
 /// Bump when the prompt or schema changes, so entries can be re-analysed later.
 const kAnalysisVersion = 1;
-const kGeminiModel = 'gemini-2.5-flash';
+
+/// Models to try, best first. The free tier caps each model separately
+/// (Gemini 3.7 Flash: 5 RPM / 20 RPD), so when the strongest model is rate
+/// limited the call falls through to the next one instead of failing the
+/// entry — the lite models at the end carry a much higher daily quota
+/// (15 RPM / 500 RPD) and keep the app usable for the rest of the day.
+const kGeminiModels = <String>[
+  'gemini-3.7-flash',
+  'gemini-3.5-flash',
+  'gemini-2.5-flash',
+  'gemini-3.5-flash-lite',
+];
+
+/// Preferred model — what a fresh call starts with.
+const kGeminiModel = 'gemini-3.7-flash';
 
 class GeminiException implements Exception {
   final String message;
   GeminiException(this.message);
+  @override
+  String toString() => message;
+}
+
+/// Internal: a failure that justifies trying the next model in [kGeminiModels].
+class _GeminiRetryable implements Exception {
+  final String message;
+  _GeminiRetryable(this.message);
   @override
   String toString() => message;
 }
@@ -221,13 +243,42 @@ Zusammenfassungen:
     return _toAnalysisResult(data);
   }
 
+  /// The model that produced the most recent successful response — may be a
+  /// fallback rather than [kGeminiModel], so it is what gets recorded on the
+  /// entry.
+  String lastUsedModel = kGeminiModel;
+
+  /// Walks [kGeminiModels] in order until one answers. Only quota/availability
+  /// failures fall through; a real error (bad key, malformed request) stops
+  /// immediately, since retrying it on another model would fail the same way.
   Future<Map<String, dynamic>> _generateJson(
     String apiKey,
     List<Map<String, Object>> parts,
     Map<String, Object> schema, {
     Duration timeout = const Duration(seconds: 90),
   }) async {
-    final uri = Uri.parse('$_endpoint/$kGeminiModel:generateContent?key=$apiKey');
+    GeminiException? lastError;
+    for (final model in kGeminiModels) {
+      try {
+        final data = await _generateJsonWith(model, apiKey, parts, schema,
+            timeout: timeout);
+        lastUsedModel = model;
+        return data;
+      } on _GeminiRetryable catch (e) {
+        lastError = GeminiException(e.message);
+      }
+    }
+    throw lastError ?? GeminiException('Kein Gemini-Modell verfügbar.');
+  }
+
+  Future<Map<String, dynamic>> _generateJsonWith(
+    String model,
+    String apiKey,
+    List<Map<String, Object>> parts,
+    Map<String, Object> schema, {
+    Duration timeout = const Duration(seconds: 90),
+  }) async {
+    final uri = Uri.parse('$_endpoint/$model:generateContent?key=$apiKey');
 
     final body = jsonEncode({
       'contents': [
@@ -256,7 +307,15 @@ Zusammenfassungen:
     }
 
     if (res.statusCode != 200) {
-      throw GeminiException(_errorFrom(res));
+      final message = _errorFrom(res);
+      // 429 = quota exhausted, 503 = model overloaded, 404 = the model is
+      // unknown to this key/API version. All three are worth retrying on the
+      // next model in the chain; a 400 (bad key, malformed request) is not —
+      // it would just re-upload the whole recording to fail the same way.
+      if (const [404, 429, 503].contains(res.statusCode)) {
+        throw _GeminiRetryable(message);
+      }
+      throw GeminiException(message);
     }
 
     return _extractJson(res.body);
