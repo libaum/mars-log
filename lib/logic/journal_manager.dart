@@ -6,6 +6,7 @@ import 'package:mars_log/data/journal_repository.dart';
 import 'package:mars_log/data/local_storage_service.dart';
 import 'package:mars_log/data/on_device_analysis_service.dart';
 import 'package:mars_log/domain/journal_entry.dart';
+import 'package:mars_log/logic/analysis_task_service.dart';
 import 'package:mars_log/logic/location_service.dart';
 import 'package:mars_log/logic/recording_manager.dart';
 import 'package:mars_log/services/service_locator.dart';
@@ -20,6 +21,15 @@ class JournalManager {
   final _location = getIt<LocationService>();
   final _cloud = getIt<CloudAnalysisEngine>();
   final _onDevice = getIt<OnDeviceAnalysisEngine>();
+  final _task = getIt<AnalysisTaskService>();
+
+  /// Ids of entries whose analysis is running right now, so [resumePending]
+  /// doesn't start a second pass over one that is simply still working.
+  final _inFlight = <String>{};
+
+  /// Failed entries already retried once in this app session — a network error
+  /// is worth one automatic retry, a loop of them is not.
+  final _retried = <String>{};
 
   late final ValueNotifier<List<JournalEntry>> entriesNotifier;
   late final ValueNotifier<List<JournalEntry>> trashNotifier;
@@ -79,35 +89,40 @@ class JournalManager {
     _refresh();
 
     final engine = _activeEngine();
+    _inFlight.add(entry.id);
     try {
-      final partial = await engine
-          .analyzeAudio([File(_repo.audioPath(rec.fileName))]);
-      entry.transcript = [entry.transcript, partial.transcript]
-          .where((t) => t != null && t.isNotEmpty)
-          .join('\n\n');
+      await _task.run(() async {
+        final partial = await engine
+            .analyzeAudio([File(_repo.audioPath(rec.fileName))]);
+        entry.transcript = [entry.transcript, partial.transcript]
+            .where((t) => t != null && t.isNotEmpty)
+            .join('\n\n');
 
-      if (entry.audioDeleted) {
-        await _repo.deleteAudioFile(rec.fileName);
-      } else {
-        entry.audioFileNames.add(rec.fileName);
-      }
+        if (entry.audioDeleted) {
+          await _repo.deleteAudioFile(rec.fileName);
+        } else {
+          entry.audioFileNames.add(rec.fileName);
+        }
 
-      final result = await engine.analyzeText(entry.transcript!);
-      entry
-        ..summary = result.summary
-        ..moodLabel = result.moodLabel
-        ..moodScore = result.moodScore
-        ..dimensions = result.dimensions
-        ..tags = result.tags
-        ..analysisModel = engine.modelName
-        ..analysisVersion = kAnalysisVersion
-        ..errorMessage = null
-        ..status = EntryStatus.ready;
-      await _maybeDiscardAudio(entry);
+        final result = await engine.analyzeText(entry.transcript!);
+        entry
+          ..summary = result.summary
+          ..moodLabel = result.moodLabel
+          ..moodScore = result.moodScore
+          ..dimensions = result.dimensions
+          ..tags = result.tags
+          ..analysisModel = engine.modelName
+          ..analysisVersion = kAnalysisVersion
+          ..errorMessage = null
+          ..status = EntryStatus.ready;
+        await _maybeDiscardAudio(entry);
+      });
     } catch (e) {
       entry
         ..status = EntryStatus.failed
         ..errorMessage = e.toString();
+    } finally {
+      _inFlight.remove(entry.id);
     }
     await _repo.upsert(entry);
     _refresh();
@@ -133,34 +148,73 @@ class JournalManager {
   }
 
   Future<void> _analyze(JournalEntry entry, AnalysisEngine engine) async {
+    _inFlight.add(entry.id);
     try {
-      // Once the audio is gone, the transcript is the only source to work from.
-      final result = entry.audioDeleted
-          ? await engine.analyzeText(entry.transcript ?? '')
-          : await engine.analyzeAudio(
-              entry.audioFileNames
-                  .map((f) => File(_repo.audioPath(f)))
-                  .toList(),
-            );
-      entry
-        ..transcript = result.transcript
-        ..summary = result.summary
-        ..moodLabel = result.moodLabel
-        ..moodScore = result.moodScore
-        ..dimensions = result.dimensions
-        ..tags = result.tags
-        ..analysisModel = engine.modelName
-        ..analysisVersion = kAnalysisVersion
-        ..errorMessage = null
-        ..status = EntryStatus.ready;
-      await _maybeDiscardAudio(entry);
+      await _task.run(() async {
+        // Once the audio is gone, the transcript is the only source to work
+        // from.
+        final result = entry.audioDeleted
+            ? await engine.analyzeText(entry.transcript ?? '')
+            : await engine.analyzeAudio(
+                entry.audioFileNames
+                    .map((f) => File(_repo.audioPath(f)))
+                    .toList(),
+              );
+        entry
+          ..transcript = result.transcript
+          ..summary = result.summary
+          ..moodLabel = result.moodLabel
+          ..moodScore = result.moodScore
+          ..dimensions = result.dimensions
+          ..tags = result.tags
+          ..analysisModel = engine.modelName
+          ..analysisVersion = kAnalysisVersion
+          ..errorMessage = null
+          ..status = EntryStatus.ready;
+        await _maybeDiscardAudio(entry);
+      });
     } catch (e) {
       entry
         ..status = EntryStatus.failed
         ..errorMessage = e.toString();
+    } finally {
+      _inFlight.remove(entry.id);
     }
     await _repo.upsert(entry);
     _refresh();
+  }
+
+  /// Second line of defence behind the foreground service: if the process was
+  /// killed (or frozen hard enough to kill the request) mid-analysis, the entry
+  /// is still sitting in `entries.json` as `analyzing` — or as `failed` with a
+  /// dropped connection. Called on app start and whenever the app comes back to
+  /// the foreground; picks those up and runs them again.
+  Future<void> resumePending() async {
+    final engine = _activeEngine();
+    for (final entry in _repo.entries) {
+      if (_inFlight.contains(entry.id)) continue;
+      if (entry.status == EntryStatus.analyzing) {
+        await _analyze(entry, engine);
+      } else if (entry.status == EntryStatus.failed &&
+          _isNetworkError(entry.errorMessage) &&
+          _retried.add(entry.id)) {
+        await _analyze(entry, engine);
+      }
+    }
+  }
+
+  /// A transport-level failure (frozen process, lost connection, timeout) is
+  /// worth retrying by itself; a rejected key or exhausted quota is not.
+  bool _isNetworkError(String? message) {
+    if (message == null) return false;
+    const markers = [
+      'Netzwerkfehler',
+      'Zeitüberschreitung',
+      'ClientException',
+      'SocketException',
+      'Connection closed',
+    ];
+    return markers.any(message.contains);
   }
 
   /// If the "delete audio after transcription" setting is on, drop the audio now

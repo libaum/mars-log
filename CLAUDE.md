@@ -38,13 +38,16 @@ Managers expose state via `ValueNotifier`; UI subscribes with `ValueListenableBu
 | `RecordingManager` | Microphone lifecycle; records WAV 16 kHz mono; timer |
 | `LocationService` | Best-effort GPS + reverse-geocoded label for a new entry; silent/nullable, never throws |
 | `NotificationManager` | Optional evening reminder; schedules a rolling window of one-shots, skipping days that already have a log |
-| `JournalManager` | Core state: `entriesNotifier` + `trashNotifier`, `createFromAudio`, `reanalyze`, `delete` (soft, to trash), `restore`, `purge`, `emptyTrash`, `setDay`, `setPlace` |
+| `AnalysisTaskService` | Holds an Android foreground service (`flutter_foreground_task`, `dataSync`) for the duration of an analysis, so a backgrounded app isn't frozen mid-request. Ref-counted, no task handler — the work stays in the main isolate |
+| `JournalManager` | Core state: `entriesNotifier` + `trashNotifier`, `createFromAudio`, `reanalyze`, `delete` (soft, to trash), `restore`, `purge`, `emptyTrash`, `setDay`, `setPlace`, `resumePending` |
 | `SettingsManager` | API key + PIN/biometric toggles |
 | `LockManager` | Optional PIN/biometric gate; re-locks on app resume |
 | `ThemeManager` | Light/dark following system (Mars pattern) |
 
 ### Recording → analysis flow
 Tap stop → `RecordingManager.stop()` returns a `RecordingResult` → `JournalManager.createFromAudio` writes a provisional `analyzing` entry (UI shows a spinner) → best-effort `LocationService` stamp → `GeminiService.analyze` → entry becomes `ready` (or `failed` with the audio kept for retry). On success, if the "delete audio after transcription" setting is on, the audio is discarded and `audioDeleted` set.
+
+The whole analysis runs inside `AnalysisTaskService.run`, so Android keeps the process out of the cached/frozen bucket while the request is in flight (otherwise backgrounding the app kills the socket → `ClientException`). As a backstop, `JournalManager.resumePending()` runs on app start and on every resume and re-runs entries still stuck in `analyzing`, plus `failed` ones whose error looks transport-level (once per session). `GeminiService` additionally retries a dropped connection once before giving up.
 
 ### Persistence
 `<appDocuments>/entries.json` (index) + `<appDocuments>/audio/<id>.wav`. Transcripts can be long, so entries live in a JSON file rather than SharedPreferences, which also makes export a simple directory zip. No backend/sync.

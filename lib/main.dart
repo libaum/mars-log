@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:mars_log/logic/journal_manager.dart';
 import 'package:mars_log/logic/lock_manager.dart';
 import 'package:mars_log/pages/lock_screen.dart';
 import 'package:mars_log/pages/main_screen.dart';
@@ -66,11 +67,14 @@ class AppRoot extends StatefulWidget {
 
 class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
   final _lock = getIt<LockManager>();
+  final _journal = getIt<JournalManager>();
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // Pick up anything left half-analysed by a killed or frozen process.
+    _journal.resumePending();
   }
 
   @override
@@ -83,6 +87,8 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.paused) {
       _lock.lockIfEnabled();
+    } else if (state == AppLifecycleState.resumed) {
+      _journal.resumePending();
     }
   }
 

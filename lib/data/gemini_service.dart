@@ -293,13 +293,7 @@ Zusammenfassungen:
 
     late final http.Response res;
     try {
-      res = await http
-          .post(
-            uri,
-            headers: {'Content-Type': 'application/json'},
-            body: body,
-          )
-          .timeout(timeout);
+      res = await _postWithRetry(uri, body, timeout);
     } on TimeoutException {
       throw GeminiException('Zeitüberschreitung bei der Gemini-Anfrage.');
     } catch (e) {
@@ -319,6 +313,35 @@ Zusammenfassungen:
     }
 
     return _extractJson(res.body);
+  }
+
+  /// Android freezes a backgrounded process and drops the sockets it holds, so
+  /// a request in flight when the app is sent to the background dies with a
+  /// [http.ClientException] ("Connection closed while receiving data"). A
+  /// foreground service normally prevents that; this single retry covers the
+  /// cases it doesn't (a network switch, a connection dropped in the gap
+  /// before the service is up) instead of failing the whole entry.
+  Future<http.Response> _postWithRetry(
+    Uri uri,
+    String body,
+    Duration timeout,
+  ) async {
+    for (var attempt = 0;; attempt++) {
+      try {
+        return await http
+            .post(
+              uri,
+              headers: {'Content-Type': 'application/json'},
+              body: body,
+            )
+            .timeout(timeout);
+      } on http.ClientException {
+        if (attempt > 0) rethrow;
+      } on SocketException {
+        if (attempt > 0) rethrow;
+      }
+      await Future<void>.delayed(const Duration(seconds: 2));
+    }
   }
 
   /// Network exceptions from the http package stringify the request URI,

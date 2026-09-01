@@ -6,6 +6,7 @@ import 'package:mars_log/data/journal_repository.dart';
 import 'package:mars_log/data/local_storage_service.dart';
 import 'package:mars_log/data/on_device_analysis_service.dart';
 import 'package:mars_log/data/secure_storage_service.dart';
+import 'package:mars_log/logic/analysis_task_service.dart';
 import 'package:mars_log/logic/journal_manager.dart';
 import 'package:mars_log/logic/location_service.dart';
 import 'package:mars_log/logic/lock_manager.dart';
@@ -35,6 +36,7 @@ Future<void> setupServiceLocator() async {
   getIt.registerSingleton<ThemeManager>(ThemeManager());
   getIt.registerSingleton<SettingsManager>(SettingsManager());
   getIt.registerSingleton<RecordingManager>(RecordingManager());
+  getIt.registerSingleton<AnalysisTaskService>(AnalysisTaskService());
   getIt.registerSingleton<JournalManager>(JournalManager());
   getIt.registerSingleton<ExportService>(
     ExportService(getIt<JournalRepository>()),
