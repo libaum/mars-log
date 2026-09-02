@@ -4,10 +4,24 @@ import 'package:mars_log/domain/mood.dart';
 import 'package:mars_log/theme/theme_constants.dart';
 
 /// One line in the timeline: date, mood, and a glimpse of the summary.
+///
+/// In selection mode the mood glyph is replaced by a selection dot and
+/// unselected rows fade back, so the timeline stays one calm list.
 class EntryTile extends StatelessWidget {
   final JournalEntry entry;
   final VoidCallback onTap;
-  const EntryTile({super.key, required this.entry, required this.onTap});
+  final VoidCallback? onLongPress;
+  final bool selectionMode;
+  final bool selected;
+
+  const EntryTile({
+    super.key,
+    required this.entry,
+    required this.onTap,
+    this.onLongPress,
+    this.selectionMode = false,
+    this.selected = false,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -15,39 +29,60 @@ class EntryTile extends StatelessWidget {
 
     return InkWell(
       onTap: onTap,
+      onLongPress: onLongPress,
       splashColor: Colors.transparent,
       highlightColor: Colors.transparent,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 18),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            SizedBox(width: 34, child: Center(child: _leading(primary))),
-            const SizedBox(width: 18),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(formatRelativeDate(entry.day), style: TEXT_STYLE_DATE),
-                  const SizedBox(height: 4),
-                  Text(
-                    _subtitle(),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: TEXT_STYLE_SUMMARY,
-                  ),
-                ],
+      child: Opacity(
+        opacity: selectionMode && !selected ? 0.4 : 1,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 18),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              SizedBox(
+                width: 34,
+                child: Center(
+                  child: selectionMode ? _selectionDot(primary) : _leading(primary),
+                ),
               ),
-            ),
-            if (entry.status == EntryStatus.ready && entry.moodScore != null) ...[
-              const SizedBox(width: 12),
-              Text(
-                entry.moodScore!.toStringAsFixed(1),
-                style: TEXT_STYLE_SCORE.copyWith(fontSize: 22),
+              const SizedBox(width: 18),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(formatRelativeDate(entry.day), style: TEXT_STYLE_DATE),
+                    const SizedBox(height: 4),
+                    Text(
+                      _subtitle(),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TEXT_STYLE_SUMMARY,
+                    ),
+                  ],
+                ),
               ),
+              if (entry.status == EntryStatus.ready && entry.moodScore != null) ...[
+                const SizedBox(width: 12),
+                Text(
+                  entry.moodScore!.toStringAsFixed(1),
+                  style: TEXT_STYLE_SCORE.copyWith(fontSize: 22),
+                ),
+              ],
             ],
-          ],
+          ),
         ),
+      ),
+    );
+  }
+
+  Widget _selectionDot(Color primary) {
+    return Container(
+      width: 20,
+      height: 20,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        border: Border.all(color: primary.withValues(alpha: 0.5), width: 0.8),
+        color: selected ? primary : Colors.transparent,
       ),
     );
   }
