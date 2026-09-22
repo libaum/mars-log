@@ -111,35 +111,46 @@ class _StatsScreenState extends State<StatsScreen> {
               final stats = MonthStats(_month, monthEntries);
               final streak = currentStreak(entries);
 
-              return ListView(
-                padding: const EdgeInsets.fromLTRB(32, 24, 32, 48),
-                children: [
-                  Text('Statistik', style: TEXT_STYLE_TITLE),
-                  const SizedBox(height: 28),
-                  _overview(entries.length, streak, primary),
-                  const SizedBox(height: 40),
-                  _monthNav(primary),
-                  const SizedBox(height: 24),
-                  if (monthEntries.isEmpty)
-                    const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 32),
-                      child: Text('Keine Einträge in diesem Monat.',
-                          style: TEXT_STYLE_STATUS),
-                    )
-                  else ...[
-                    _reviewSection(monthEntries, primary),
-                    const SizedBox(height: 36),
-                    _moodCalendar(stats, primary),
-                    const SizedBox(height: 36),
-                    _moodChart(stats, primary),
-                    const SizedBox(height: 36),
-                    _dimensions(stats, primary),
-                    if (stats.topTags.isNotEmpty) ...[
+              return GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onHorizontalDragEnd: (details) {
+                  final velocity = details.primaryVelocity ?? 0;
+                  if (velocity < -250) {
+                    if (!_isCurrentMonth) _shiftMonth(1);
+                  } else if (velocity > 250) {
+                    _shiftMonth(-1);
+                  }
+                },
+                child: ListView(
+                  padding: const EdgeInsets.fromLTRB(32, 24, 32, 48),
+                  children: [
+                    Text('Statistik', style: TEXT_STYLE_TITLE),
+                    const SizedBox(height: 28),
+                    _overview(entries.length, streak, primary),
+                    const SizedBox(height: 40),
+                    _monthNav(primary),
+                    const SizedBox(height: 24),
+                    if (monthEntries.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 32),
+                        child: Text('Keine Einträge in diesem Monat.',
+                            style: TEXT_STYLE_STATUS),
+                      )
+                    else ...[
+                      _reviewSection(monthEntries, primary),
                       const SizedBox(height: 36),
-                      _tags(stats, primary),
+                      _moodCalendar(stats, primary),
+                      const SizedBox(height: 36),
+                      _moodChart(stats, primary),
+                      const SizedBox(height: 36),
+                      _dimensions(stats, primary),
+                      if (stats.topTags.isNotEmpty) ...[
+                        const SizedBox(height: 36),
+                        _tags(stats, primary),
+                      ],
                     ],
                   ],
-                ],
+                ),
               );
             },
           ),

@@ -13,6 +13,7 @@ class LocalStorageService {
       'delete_audio_after_transcription';
   static const _keyMonthReviewPrefix = 'month_review_';
   static const _keyAnalysisEngine = 'analysis_engine';
+  static const _keyLocationTrackingEnabled = 'location_tracking_enabled';
 
   final SharedPreferences _prefs;
 
@@ -72,4 +73,11 @@ class LocalStorageService {
       _prefs.getString(_keyAnalysisEngine) ?? 'cloud';
   Future<void> setAnalysisEngine(String v) =>
       _prefs.setString(_keyAnalysisEngine, v);
+
+  /// Background location tracking: a few GPS fixes a day, independent of
+  /// journal entries (see [LocationTrackingManager]).
+  bool getLocationTrackingEnabled() =>
+      _prefs.getBool(_keyLocationTrackingEnabled) ?? false;
+  Future<void> setLocationTrackingEnabled(bool v) =>
+      _prefs.setBool(_keyLocationTrackingEnabled, v);
 }

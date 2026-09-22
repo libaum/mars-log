@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:mars_log/logic/journal_manager.dart';
 import 'package:mars_log/logic/lock_manager.dart';
 import 'package:mars_log/pages/lock_screen.dart';
@@ -28,6 +29,13 @@ class MarsLog extends StatelessWidget {
         return MaterialApp(
           debugShowCheckedModeBanner: false,
           title: 'Mars Log',
+          locale: const Locale('de'),
+          supportedLocales: const [Locale('de')],
+          localizationsDelegates: const [
+            GlobalMaterialLocalizations.delegate,
+            GlobalWidgetsLocalizations.delegate,
+            GlobalCupertinoLocalizations.delegate,
+          ],
           theme: themeManager.lightTheme,
           darkTheme: themeManager.darkTheme,
           themeMode: themeMode,

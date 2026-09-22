@@ -4,6 +4,7 @@ import 'package:mars_log/data/local_storage_service.dart';
 import 'package:mars_log/data/on_device_analysis_service.dart';
 import 'package:mars_log/domain/journal_entry.dart';
 import 'package:mars_log/logic/journal_manager.dart';
+import 'package:mars_log/logic/location_tracking_manager.dart';
 import 'package:mars_log/logic/notification_manager.dart';
 import 'package:mars_log/logic/settings_manager.dart';
 import 'package:mars_log/logic/lock_manager.dart';
@@ -28,6 +29,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final _export = getIt<ExportService>();
   final _journal = getIt<JournalManager>();
   final _notifications = getIt<NotificationManager>();
+  final _locationTracking = getIt<LocationTrackingManager>();
   final _storage = getIt<LocalStorageService>();
   final _onDevice = getIt<OnDeviceAnalysisEngine>();
   bool _preparingModels = false;
@@ -137,6 +139,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _toggleReminder(bool value) async {
     final ok = await _notifications.setEnabled(value);
     if (value && !ok) _snack('Notifications not allowed.');
+  }
+
+  Future<void> _toggleLocationTracking(bool value) async {
+    final ok = await _locationTracking.setEnabled(value);
+    if (value && !ok) _snack('Standortzugriff nicht erlaubt.');
   }
 
   Future<void> _toggleDeleteAudio(bool value) async {
@@ -256,6 +263,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           ),
                         ),
                     ],
+                  ),
+                ),
+                ValueListenableBuilder<bool>(
+                  valueListenable: _locationTracking.enabledNotifier,
+                  builder: (context, enabled, _) => _toggleRow(
+                    'Standort-Tracking',
+                    'Erfasst mehrmals täglich deinen Standort im Hintergrund',
+                    enabled,
+                    () => _toggleLocationTracking(!enabled),
                   ),
                 ),
                 _toggleRow(

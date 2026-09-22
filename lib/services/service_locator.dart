@@ -7,8 +7,10 @@ import 'package:mars_log/data/local_storage_service.dart';
 import 'package:mars_log/data/on_device_analysis_service.dart';
 import 'package:mars_log/data/secure_storage_service.dart';
 import 'package:mars_log/logic/analysis_task_service.dart';
+import 'package:mars_log/data/location_history_repository.dart';
 import 'package:mars_log/logic/journal_manager.dart';
 import 'package:mars_log/logic/location_service.dart';
+import 'package:mars_log/logic/location_tracking_manager.dart';
 import 'package:mars_log/logic/lock_manager.dart';
 import 'package:mars_log/logic/notification_manager.dart';
 import 'package:mars_log/logic/recording_manager.dart';
@@ -27,6 +29,9 @@ Future<void> setupServiceLocator() async {
   getIt.registerSingleton<JournalRepository>(
     await JournalRepository.getInstance(),
   );
+  getIt.registerSingleton<LocationHistoryRepository>(
+    await LocationHistoryRepository.getInstance(),
+  );
   getIt.registerSingleton<GeminiService>(GeminiService());
   getIt.registerSingleton<LocationService>(LocationService());
 
@@ -42,6 +47,10 @@ Future<void> setupServiceLocator() async {
     ExportService(getIt<JournalRepository>()),
   );
   getIt.registerSingleton<LockManager>(LockManager());
+
+  final locationTracking = LocationTrackingManager();
+  getIt.registerSingleton<LocationTrackingManager>(locationTracking);
+  await locationTracking.init();
 
   final notifications = NotificationManager();
   getIt.registerSingleton<NotificationManager>(notifications);
