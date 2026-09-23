@@ -14,6 +14,9 @@ class LocalStorageService {
   static const _keyMonthReviewPrefix = 'month_review_';
   static const _keyAnalysisEngine = 'analysis_engine';
   static const _keyLocationTrackingEnabled = 'location_tracking_enabled';
+  static const _keyDailyExportEnabled = 'daily_export_enabled';
+  static const _keyDailyExportFolderUri = 'daily_export_folder_uri';
+  static const _keyDailyExportFolderName = 'daily_export_folder_name';
 
   final SharedPreferences _prefs;
 
@@ -80,4 +83,25 @@ class LocalStorageService {
       _prefs.getBool(_keyLocationTrackingEnabled) ?? false;
   Future<void> setLocationTrackingEnabled(bool v) =>
       _prefs.setBool(_keyLocationTrackingEnabled, v);
+
+  /// Daily automatic backup into a user-chosen (SAF) folder — see
+  /// [DailyExportManager]. The URI is the persisted SAF tree permission; the
+  /// name is cached separately so Settings can show it without resolving the
+  /// URI again.
+  bool getDailyExportEnabled() =>
+      _prefs.getBool(_keyDailyExportEnabled) ?? false;
+  Future<void> setDailyExportEnabled(bool v) =>
+      _prefs.setBool(_keyDailyExportEnabled, v);
+
+  String? getDailyExportFolderUri() =>
+      _prefs.getString(_keyDailyExportFolderUri);
+  Future<void> setDailyExportFolderUri(String? v) => v == null
+      ? _prefs.remove(_keyDailyExportFolderUri)
+      : _prefs.setString(_keyDailyExportFolderUri, v);
+
+  String? getDailyExportFolderName() =>
+      _prefs.getString(_keyDailyExportFolderName);
+  Future<void> setDailyExportFolderName(String? v) => v == null
+      ? _prefs.remove(_keyDailyExportFolderName)
+      : _prefs.setString(_keyDailyExportFolderName, v);
 }

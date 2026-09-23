@@ -75,7 +75,7 @@ lib/
 ## Setup notes
 - Gemini API key is entered in Settings (Google AI Studio, free tier). Without it, entries fail with a clear message and can be re-analysed once a key is set.
 - Android: `RECORD_AUDIO` + `INTERNET` + `POST_NOTIFICATIONS` + `ACCESS_COARSE/FINE_LOCATION` permissions; `MainActivity` extends `FlutterFragmentActivity` (required by `local_auth`); `minSdk` 23. Location is requested at first recording and is optional — denial just leaves entries without a location.
-- AGP 8.11.1 / Kotlin 2.2.20 / Gradle 8.14 (matches mars_fx; the Flutter 3.44 template's preview AGP 9 breaks `flutter_secure_storage` dexing).
+- AGP 8.11.1 / Kotlin 2.2.20 / Gradle 8.14, pinned below the rest of the Mars ecosystem (2026-09): `share_plus` >=13.0.0 (required once `file_picker` is bumped past 8.x for AGP 9's compileSdk 36 floor) fails `compileDebugKotlin` under AGP 9's built-in Kotlin — unresolved references to its own `ShareSuccessManager`/`SharePlusPendingIntent` classes. Revisit once `share_plus` ships an AGP-9-compatible release.
 
 ## Build Variants
 | Variant | Package | App Name |

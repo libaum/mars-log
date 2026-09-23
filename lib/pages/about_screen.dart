@@ -44,7 +44,8 @@ class AboutScreen extends StatelessWidget {
                   const SizedBox(height: 16),
                   // Honest disclosure: audio leaves the device for transcription.
                   const Text(
-                    'Voice recordings are transcribed by Google Gemini.',
+                    'Voice recordings are transcribed by Google Gemini. '
+                    'Map data by OpenStreetMap contributors.',
                     style: TextStyle(fontSize: 13, fontWeight: FontWeight.w300, color: COLOR_SECONDARY, height: 1.5),
                   ),
                   const SizedBox(height: 32),

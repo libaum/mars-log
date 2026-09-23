@@ -7,7 +7,10 @@ import 'package:mars_log/data/local_storage_service.dart';
 import 'package:mars_log/data/on_device_analysis_service.dart';
 import 'package:mars_log/data/secure_storage_service.dart';
 import 'package:mars_log/logic/analysis_task_service.dart';
+import 'package:mars_log/logic/background_tasks.dart';
+import 'package:mars_log/data/google_timeline_import_service.dart';
 import 'package:mars_log/data/location_history_repository.dart';
+import 'package:mars_log/logic/daily_export_manager.dart';
 import 'package:mars_log/logic/journal_manager.dart';
 import 'package:mars_log/logic/location_service.dart';
 import 'package:mars_log/logic/location_tracking_manager.dart';
@@ -32,6 +35,9 @@ Future<void> setupServiceLocator() async {
   getIt.registerSingleton<LocationHistoryRepository>(
     await LocationHistoryRepository.getInstance(),
   );
+  getIt.registerSingleton<GoogleTimelineImportService>(
+    GoogleTimelineImportService(getIt<LocationHistoryRepository>()),
+  );
   getIt.registerSingleton<GeminiService>(GeminiService());
   getIt.registerSingleton<LocationService>(LocationService());
 
@@ -48,9 +54,18 @@ Future<void> setupServiceLocator() async {
   );
   getIt.registerSingleton<LockManager>(LockManager());
 
+  // Exactly once, before any manager registers a periodic task: the plugin
+  // keeps a single callback handle, so initializing per-feature would leave
+  // only the last one working.
+  await initializeBackgroundTasks();
+
   final locationTracking = LocationTrackingManager();
   getIt.registerSingleton<LocationTrackingManager>(locationTracking);
   await locationTracking.init();
+
+  final dailyExport = DailyExportManager();
+  getIt.registerSingleton<DailyExportManager>(dailyExport);
+  await dailyExport.init();
 
   final notifications = NotificationManager();
   getIt.registerSingleton<NotificationManager>(notifications);

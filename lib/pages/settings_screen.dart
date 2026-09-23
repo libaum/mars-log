@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:mars_log/data/export_service.dart';
+import 'package:mars_log/data/google_timeline_import_service.dart';
 import 'package:mars_log/data/local_storage_service.dart';
 import 'package:mars_log/data/on_device_analysis_service.dart';
 import 'package:mars_log/domain/journal_entry.dart';
+import 'package:mars_log/logic/daily_export_manager.dart';
 import 'package:mars_log/logic/journal_manager.dart';
 import 'package:mars_log/logic/location_tracking_manager.dart';
 import 'package:mars_log/logic/notification_manager.dart';
@@ -30,6 +32,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final _journal = getIt<JournalManager>();
   final _notifications = getIt<NotificationManager>();
   final _locationTracking = getIt<LocationTrackingManager>();
+  final _dailyExport = getIt<DailyExportManager>();
+  final _timelineImport = getIt<GoogleTimelineImportService>();
+  bool _importingTimeline = false;
   final _storage = getIt<LocalStorageService>();
   final _onDevice = getIt<OnDeviceAnalysisEngine>();
   bool _preparingModels = false;
@@ -142,8 +147,53 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _toggleLocationTracking(bool value) async {
-    final ok = await _locationTracking.setEnabled(value);
-    if (value && !ok) _snack('Standortzugriff nicht erlaubt.');
+    final result = await _locationTracking.setEnabled(value);
+    if (!mounted) return;
+    switch (result) {
+      case LocationTrackingResult.denied:
+        _snack('Standortzugriff nicht erlaubt.');
+      case LocationTrackingResult.enabledForegroundOnly:
+        // Registering the job "worked", but Android starves it in the
+        // background without "Immer zulassen" — say so instead of pretending.
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            duration: const Duration(seconds: 8),
+            content: const Text(
+                'Standort steht auf „Nur bei App-Nutzung" — im Hintergrund '
+                'wird dann kaum etwas erfasst.'),
+            action: SnackBarAction(
+              label: 'Einstellungen',
+              onPressed: _locationTracking.openSystemSettings,
+            ),
+          ),
+        );
+      case LocationTrackingResult.off:
+      case LocationTrackingResult.enabled:
+        break;
+    }
+  }
+
+  Future<void> _importTimeline() async {
+    setState(() => _importingTimeline = true);
+    try {
+      final count = await _timelineImport.importFromPicker();
+      if (count != null) _snack('$count Standortpunkte importiert.');
+    } catch (e) {
+      _snack('Import fehlgeschlagen: $e');
+    } finally {
+      if (mounted) setState(() => _importingTimeline = false);
+    }
+  }
+
+  Future<void> _pickDailyExportFolder() async {
+    final ok = await _dailyExport.pickFolder();
+    if (!ok) return;
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _toggleDailyExport(bool value) async {
+    final ok = await _dailyExport.setEnabled(value);
+    if (value && !ok) _snack('Erst einen Ordner wählen.');
   }
 
   Future<void> _toggleDeleteAudio(bool value) async {
@@ -274,6 +324,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     () => _toggleLocationTracking(!enabled),
                   ),
                 ),
+                _actionRow(
+                  _importingTimeline
+                      ? 'Zeitachse wird importiert…'
+                      : 'Google-Zeitachse importieren',
+                  _importingTimeline ? () {} : _importTimeline,
+                ),
                 _toggleRow(
                   'Delete audio after transcription',
                   'Saves space — the transcript stays',
@@ -305,6 +361,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 _actionRow('Export (share)', _doExport),
                 _actionRow('Export (save to device)', _doExportToDisk),
                 _actionRow('Import', _doImport),
+                ValueListenableBuilder<String?>(
+                  valueListenable: _dailyExport.folderNameNotifier,
+                  builder: (context, folderName, _) => Column(
+                    children: [
+                      _navRow(
+                        'Sicherungsordner',
+                        trailing: folderName ?? 'Nicht gewählt',
+                        onTap: _pickDailyExportFolder,
+                      ),
+                      ValueListenableBuilder<bool>(
+                        valueListenable: _dailyExport.enabledNotifier,
+                        builder: (context, enabled, _) => _toggleRow(
+                          'Tägliche Sicherung',
+                          'Sichert automatisch einmal täglich in den gewählten Ordner',
+                          enabled,
+                          () => _toggleDailyExport(!enabled),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
                 ValueListenableBuilder<List<JournalEntry>>(
                   valueListenable: _journal.trashNotifier,
                   builder: (context, trash, _) => _navRow(

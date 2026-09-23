@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:archive/archive_io.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
@@ -29,6 +30,14 @@ class ExportService {
     }
     await encoder.close();
     return zipPath;
+  }
+
+  /// Builds a zip and returns its raw bytes — for callers that hand it to
+  /// something other than a file_picker dialog (e.g. a SAF write into a
+  /// user-chosen folder for the daily auto-backup).
+  Future<Uint8List> buildZipBytes() async {
+    final zipPath = await _buildZip();
+    return File(zipPath).readAsBytes();
   }
 
   /// Builds a zip and hands it to the OS share sheet.

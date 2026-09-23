@@ -42,6 +42,12 @@ class LocationService {
     }
   }
 
+  /// Human-readable label for arbitrary coordinates — same best-effort,
+  /// never-throws contract as [current]. Used by the place stats to name
+  /// clustered locations.
+  Future<String?> labelFor(double latitude, double longitude) =>
+      _label(latitude, longitude);
+
   Future<String?> _label(double lat, double lng) async {
     try {
       final marks = await placemarkFromCoordinates(lat, lng);

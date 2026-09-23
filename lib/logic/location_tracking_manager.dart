@@ -3,24 +3,11 @@ import 'package:geolocator/geolocator.dart';
 import 'package:mars_log/data/local_storage_service.dart';
 import 'package:mars_log/data/location_history_repository.dart';
 import 'package:mars_log/domain/day_location_point.dart';
+import 'package:mars_log/logic/background_tasks.dart';
 import 'package:mars_log/services/service_locator.dart';
 import 'package:workmanager/workmanager.dart';
 
 const _taskUniqueName = 'mars_log_location_tracking';
-const _taskName = 'captureLocation';
-
-/// The WorkManager entry point that runs [captureLocationFix] a few times a
-/// day, independent of whether the app is open. Must stay top-level and
-/// `vm:entry-point` per the `workmanager` plugin's contract — Android spawns
-/// a background isolate that calls straight into this function, bypassing
-/// `main()` and GetIt entirely.
-@pragma('vm:entry-point')
-void locationTrackingCallbackDispatcher() {
-  Workmanager().executeTask((task, _) async {
-    if (task == _taskName) await captureLocationFix();
-    return true;
-  });
-}
 
 /// Best-effort single GPS fix, appended to [LocationHistoryRepository].
 /// Silent on any failure (permission revoked, GPS off, timeout) — a missed
@@ -47,10 +34,27 @@ Future<void> captureLocationFix() async {
       latitude: position.latitude,
       longitude: position.longitude,
       timestamp: DateTime.now(),
+      source: LocationSource.tracked,
     ));
   } catch (_) {
     // Best-effort — never let a failed fix take down the background isolate.
   }
+}
+
+/// What actually happened when tracking was switched on — "on" and "on but
+/// the OS will throttle it" are different outcomes and the UI must say so.
+enum LocationTrackingResult {
+  off,
+
+  /// Permission denied or location services disabled; the toggle stays off.
+  denied,
+
+  /// Running with "Allow all the time".
+  enabled,
+
+  /// Running, but only "While using the app" was granted — background fixes
+  /// will mostly not happen until that's changed in system settings.
+  enabledForegroundOnly,
 }
 
 /// Toggles background location tracking on/off. Independent of the
@@ -58,35 +62,50 @@ Future<void> captureLocationFix() async {
 /// GPS fixes a day for a future route/map view, regardless of when (or
 /// whether) a journal entry is recorded.
 class LocationTrackingManager {
-  static const _frequency = Duration(hours: 4);
+  static const _frequency = Duration(hours: 1);
 
   final _storage = getIt<LocalStorageService>();
 
   final ValueNotifier<bool> enabledNotifier = ValueNotifier(false);
 
   Future<void> init() async {
-    await Workmanager().initialize(locationTrackingCallbackDispatcher);
     enabledNotifier.value = _storage.getLocationTrackingEnabled();
     if (enabledNotifier.value) await _register();
   }
 
-  /// Enables/disables tracking. Returns false if location permission was
-  /// declined (the toggle should then stay off), same contract as
-  /// [NotificationManager.setEnabled].
-  Future<bool> setEnabled(bool value) async {
-    if (value) {
-      if (!await _requestBackgroundPermission()) return false;
-      await _register();
-    } else {
+  /// Enables/disables tracking, reporting what the OS actually granted so
+  /// Settings can tell the truth rather than silently claiming success.
+  Future<LocationTrackingResult> setEnabled(bool value) async {
+    if (!value) {
       await Workmanager().cancelByUniqueName(_taskUniqueName);
+      enabledNotifier.value = false;
+      await _storage.setLocationTrackingEnabled(false);
+      return LocationTrackingResult.off;
     }
-    enabledNotifier.value = value;
-    await _storage.setLocationTrackingEnabled(value);
-    return true;
+
+    final permission = await _requestPermission();
+    if (permission == null) return LocationTrackingResult.denied;
+
+    await _register();
+    enabledNotifier.value = true;
+    await _storage.setLocationTrackingEnabled(true);
+
+    // "While in use" is enough to register the job, but Android will starve
+    // it once the app is backgrounded — which is exactly when it should run.
+    // The toggle goes on, and the caller warns.
+    return permission == LocationPermission.always
+        ? LocationTrackingResult.enabled
+        : LocationTrackingResult.enabledForegroundOnly;
   }
 
-  Future<bool> _requestBackgroundPermission() async {
-    if (!await Geolocator.isLocationServiceEnabled()) return false;
+  /// Sends the user to the system settings page for this app — the only way
+  /// to upgrade to "Allow all the time" on Android 11+, where the runtime
+  /// dialog no longer offers that option at all.
+  Future<void> openSystemSettings() => Geolocator.openAppSettings();
+
+  /// Returns the granted permission, or null if there's nothing usable.
+  Future<LocationPermission?> _requestPermission() async {
+    if (!await Geolocator.isLocationServiceEnabled()) return null;
 
     var permission = await Geolocator.checkPermission();
     if (permission == LocationPermission.denied) {
@@ -94,25 +113,21 @@ class LocationTrackingManager {
     }
     if (permission == LocationPermission.denied ||
         permission == LocationPermission.deniedForever) {
-      return false;
+      return null;
     }
-
-    // Background fixes need "Allow all the time" on Android 10+ — foreground
-    // ("while using the app") permission alone won't fire once backgrounded.
-    if (permission == LocationPermission.whileInUse) {
-      permission = await Geolocator.requestPermission();
-    }
-    return permission == LocationPermission.always ||
-        permission == LocationPermission.whileInUse;
+    // Deliberately no second requestPermission() here: on Android 10+ it does
+    // not escalate whileInUse → always. That upgrade only happens in system
+    // settings, which is what [openSystemSettings] is for.
+    return permission;
   }
 
   Future<void> _register() async {
     await Workmanager().registerPeriodicTask(
       _taskUniqueName,
-      _taskName,
+      kLocationTaskName,
       frequency: _frequency,
       constraints: Constraints(networkType: NetworkType.notRequired),
-      existingWorkPolicy: ExistingPeriodicWorkPolicy.keep,
+      existingWorkPolicy: ExistingPeriodicWorkPolicy.update,
     );
   }
 }

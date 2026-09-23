@@ -21,12 +21,20 @@ class LocationHistoryRepository {
 
   static Future<LocationHistoryRepository> getInstance() async {
     final repo = LocationHistoryRepository._();
-    await repo._load();
+    repo._docsDir = await getApplicationDocumentsDirectory();
+    await repo.reload();
     return repo;
   }
 
-  Future<void> _load() async {
-    _docsDir = await getApplicationDocumentsDirectory();
+  /// Re-reads the file into memory, dropping whatever was held before.
+  ///
+  /// Two instances of this repository are alive at different times: the app's
+  /// singleton and a fresh one built inside the WorkManager isolate. Since
+  /// each rewrites the *whole* file from its own in-memory map, a stale
+  /// foreground copy would silently erase every fix the background wrote
+  /// since app start. Every foreground mutation therefore reloads first, and
+  /// screens that display the history reload when they open.
+  Future<void> reload() async {
     final file = File(_path);
     if (!await file.exists()) return;
     try {
@@ -60,16 +68,46 @@ class LocationHistoryRepository {
   Map<String, List<DayLocationPoint>> get byDay => Map.unmodifiable(_byDay);
 
   /// Appends [point], bucketed by its own (local) date, and persists.
+  /// Reloads first so a long-lived instance can't overwrite writes made by
+  /// the other one (see [reload]).
   Future<void> addPoint(DayLocationPoint point) async {
+    await reload();
     final key = _dayKey(point.timestamp);
     (_byDay[key] ??= []).add(point);
     await _persist();
   }
 
+  /// Merges a Google Timeline import: for every day covered by [points],
+  /// first drops that day's *previously imported* points (source
+  /// `timelineImport`), then adds the fresh ones. Background-tracked points
+  /// (source `tracked`) are never touched by an import. This makes
+  /// re-importing an overlapping range (e.g. Google only keeps ~3 months of
+  /// Timeline data, so periodic re-imports overlap) idempotent instead of
+  /// piling up duplicates — the newest import always wins for its own days.
+  Future<void> importTimelinePoints(List<DayLocationPoint> points) async {
+    if (points.isEmpty) return;
+    await reload();
+    final coveredDays = points.map((p) => _dayKey(p.timestamp)).toSet();
+    for (final day in coveredDays) {
+      _byDay[day]?.removeWhere((p) => p.source == LocationSource.timelineImport);
+    }
+    for (final point in points) {
+      (_byDay[_dayKey(point.timestamp)] ??= []).add(point);
+    }
+    await _persist();
+  }
+
+  /// Writes to a temp file and renames it over the real one. A plain
+  /// `writeAsString` truncates first, so a crash — or the background isolate
+  /// writing at the same moment — could leave a half-written file, which
+  /// [reload] would then discard as corrupt, taking the whole history with
+  /// it. Rename is atomic within the same directory.
   Future<void> _persist() async {
     final json = jsonEncode(_byDay.map(
       (key, points) => MapEntry(key, points.map((p) => p.toJson()).toList()),
     ));
-    await File(_path).writeAsString(json);
+    final tmp = File('$_path.tmp');
+    await tmp.writeAsString(json, flush: true);
+    await tmp.rename(_path);
   }
 }
