@@ -169,6 +169,22 @@ void main() {
       });
     });
 
+    test('an edit of several fields is one write, normalized', () async {
+      // An editor saving field by field would see the first write's revision
+      // while the rest is pending, and read a half-saved entry back.
+      await phone.run((journal, _) async {
+        final e = entry('a');
+        await journal.upsert(e);
+        final before = journal.revision.value;
+        await journal.edit(e,
+            transcript: 'neu', place: '  Wien ', tags: [' see', '', 'ruhe ']);
+        expect(journal.revision.value, before + 1);
+        expect([e.transcript, e.place, e.tags], ['neu', 'Wien', ['see', 'ruhe']]);
+        await journal.edit(e, place: '   ');
+        expect(e.place, isNull);
+      });
+    });
+
     test('a sync apply keeps the remote stamp and never overwrites newer local edits', () async {
       await phone.run((journal, _) async {
         final local = entry('a', transcript: 'local');

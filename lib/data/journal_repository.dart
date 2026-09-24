@@ -237,11 +237,8 @@ class JournalRepository {
   }
 
   /// Sets or clears the location label (also works on old entries).
-  Future<void> setPlace(JournalEntry entry, String? place) async {
-    final trimmed = place?.trim();
-    entry.place = (trimmed == null || trimmed.isEmpty) ? null : trimmed;
-    await upsert(entry);
-  }
+  Future<void> setPlace(JournalEntry entry, String? place) =>
+      edit(entry, place: place ?? '');
 
   /// Corrects the transcript — the permanent record — or the summary derived
   /// from it. Null leaves that field alone.
@@ -249,14 +246,35 @@ class JournalRepository {
     JournalEntry entry, {
     String? transcript,
     String? summary,
+  }) =>
+      edit(entry, transcript: transcript, summary: summary);
+
+  Future<void> setTags(JournalEntry entry, List<String> tags) =>
+      edit(entry, tags: tags);
+
+  /// Several field edits as **one** write: one stamp, one revision. An editor
+  /// saving three fields through three calls would see the revision of the
+  /// first write while the others are still pending, and read that half-done
+  /// state back into its fields.
+  ///
+  /// Null leaves a field alone. [place] is trimmed and empty clears it;
+  /// [tags] are trimmed and empty ones dropped.
+  Future<void> edit(
+    JournalEntry entry, {
+    String? transcript,
+    String? summary,
+    String? place,
+    List<String>? tags,
   }) async {
     if (transcript != null) entry.transcript = transcript;
     if (summary != null) entry.summary = summary;
-    await upsert(entry);
-  }
-
-  Future<void> setTags(JournalEntry entry, List<String> tags) async {
-    entry.tags = tags.map((t) => t.trim()).where((t) => t.isNotEmpty).toList();
+    if (place != null) {
+      final trimmed = place.trim();
+      entry.place = trimmed.isEmpty ? null : trimmed;
+    }
+    if (tags != null) {
+      entry.tags = tags.map((t) => t.trim()).where((t) => t.isNotEmpty).toList();
+    }
     await upsert(entry);
   }
 
