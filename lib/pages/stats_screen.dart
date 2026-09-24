@@ -1,8 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:mars_log/data/gemini_service.dart';
+import 'package:mars_log/data/analysis_engine.dart';
 import 'package:mars_log/data/local_storage_service.dart';
 import 'package:mars_log/data/location_history_repository.dart';
-import 'package:mars_log/data/secure_storage_service.dart';
 import 'package:mars_log/domain/day_location_point.dart';
 import 'package:mars_log/domain/journal_entry.dart';
 import 'package:mars_log/domain/mood.dart';
@@ -32,8 +31,7 @@ class StatsScreen extends StatefulWidget {
 
 class _StatsScreenState extends State<StatsScreen> {
   final _journal = getIt<JournalManager>();
-  final _gemini = getIt<GeminiService>();
-  final _secure = getIt<SecureStorageService>();
+  final _engine = getIt<AnalysisEngine>();
   final _storage = getIt<LocalStorageService>();
   final _locations = getIt<LocationHistoryRepository>();
   final _location = getIt<LocationService>();
@@ -100,9 +98,7 @@ class _StatsScreenState extends State<StatsScreen> {
     });
     final monthKey = _monthKey;
     try {
-      final apiKey = await _secure.getApiKey() ?? '';
-      final review =
-          await _gemini.summarizeMonth(summaries: summaries, apiKey: apiKey);
+      final review = await _engine.summarizeMonth(summaries);
       await _storage.setMonthReview(monthKey, review);
       if (!mounted || monthKey != _monthKey) return;
       setState(() {

@@ -14,8 +14,8 @@ class RecordingResult {
       {required this.id, required this.fileName, required this.createdAt});
 }
 
-/// Owns the microphone lifecycle. Records to WAV (16 kHz mono) — small enough
-/// to inline into a Gemini request and a format Gemini always accepts.
+/// Owns the microphone lifecycle. Records AAC in m4a, 16 kHz mono — Whisper's
+/// own sample rate; whisper_ggml converts it to WAV before transcribing.
 class RecordingManager {
   final _repo = getIt<JournalRepository>();
   final AudioRecorder _rec = AudioRecorder();

@@ -5,7 +5,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mars_log/data/analysis_engine.dart';
 import 'package:mars_log/data/journal_repository.dart';
 import 'package:mars_log/data/local_storage_service.dart';
-import 'package:mars_log/data/on_device_analysis_service.dart';
 import 'package:mars_log/domain/journal_entry.dart';
 import 'package:mars_log/logic/analysis_task_service.dart';
 import 'package:mars_log/logic/journal_manager.dart';
@@ -18,7 +17,7 @@ import 'sync_test.dart' show FakeHub, Device, entry, tick, syncLive;
 
 /// A model that answers only once [gate] opens — the seconds during which a
 /// sync round can replace the entry being analyzed.
-class _Engine extends Fake implements CloudAnalysisEngine {
+class _Engine extends Fake implements AnalysisEngine {
   final gate = Completer<void>();
   final AnalysisResult Function(String? transcriptIn) respond;
   _Engine(this.respond);
@@ -35,8 +34,6 @@ class _Engine extends Fake implements CloudAnalysisEngine {
   @override
   Future<AnalysisResult> analyzeText(String transcript) async => respond(transcript);
 }
-
-class _NoOnDevice extends Fake implements OnDeviceAnalysisEngine {}
 
 class _NoLocation extends Fake implements LocationService {
   @override
@@ -71,8 +68,7 @@ JournalManager _manager(
     ..registerSingleton<JournalRepository>(journal)
     ..registerSingleton<LocalStorageService>(storage)
     ..registerSingleton<LocationService>(_NoLocation())
-    ..registerSingleton<CloudAnalysisEngine>(engine)
-    ..registerSingleton<OnDeviceAnalysisEngine>(_NoOnDevice())
+    ..registerSingleton<AnalysisEngine>(engine)
     ..registerSingleton<AnalysisTaskService>(_Task());
   return JournalManager();
 }

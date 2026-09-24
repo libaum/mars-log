@@ -1,9 +1,7 @@
 import 'dart:io';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
-import 'package:mars_log/data/analysis_engine.dart';
 import 'package:mars_log/data/journal_repository.dart';
-import 'package:mars_log/data/on_device_analysis_service.dart';
 import 'package:mars_log/domain/journal_entry.dart';
 import 'package:mars_log/domain/mood.dart';
 import 'package:mars_log/logic/journal_manager.dart';
@@ -28,15 +26,12 @@ class EntryDetailScreen extends StatefulWidget {
 class _EntryDetailScreenState extends State<EntryDetailScreen> {
   final _journal = getIt<JournalManager>();
   final _repo = getIt<JournalRepository>();
-  final _cloudEngine = getIt<CloudAnalysisEngine>();
-  final _onDeviceEngine = getIt<OnDeviceAnalysisEngine>();
   final _player = AudioPlayer();
   late String _currentId = widget.entryId;
   PageController? _pageController;
   String? _playingEntryId;
   int? _playingIndex;
   bool _leaving = false;
-  final _reanalyzingWith = <String, AnalysisEngine>{};
 
   @override
   void initState() {
@@ -412,30 +407,10 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
   }
 
   Widget _actions(JournalEntry entry, bool analyzing) {
-    // Both engines can re-run from scratch with audio still around, and
-    // from the transcript alone once audio is discarded — offer them side
-    // by side either way so the same entry can be compared cloud vs.
-    // on-device.
-    void reanalyzeWith(AnalysisEngine engine) {
-      setState(() => _reanalyzingWith[entry.id] = engine);
-      _journal.reanalyzeWith(entry, engine);
-    }
-
     final reanalyzeButtons = [
       TextButton(
-        onPressed: analyzing ? null : () => reanalyzeWith(_cloudEngine),
-        child: Text(
-            analyzing && _reanalyzingWith[entry.id] == _cloudEngine
-                ? 'Analysiert …'
-                : 'Neu analysieren (Cloud)',
-            style: TEXT_STYLE_SETTING),
-      ),
-      TextButton(
-        onPressed: analyzing ? null : () => reanalyzeWith(_onDeviceEngine),
-        child: Text(
-            analyzing && _reanalyzingWith[entry.id] == _onDeviceEngine
-                ? 'Analysiert …'
-                : 'Neu analysieren (Gerät)',
+        onPressed: analyzing ? null : () => _journal.reanalyze(entry),
+        child: Text(analyzing ? 'Analysiert …' : 'Neu analysieren',
             style: TEXT_STYLE_SETTING),
       ),
     ];
