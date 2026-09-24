@@ -1,7 +1,7 @@
 /// Processing state of an entry.
 enum EntryStatus { analyzing, ready, failed }
 
-/// The six mood dimensions Gemini estimates (0..100 each).
+/// The six mood dimensions the analysis estimates (0..100 each).
 /// Stored on every entry for future trend analysis, even if V1 barely shows them.
 const kMoodDimensions = <String>[
   'positivity',
@@ -156,7 +156,7 @@ class JournalEntry {
   }
 }
 
-/// Result of a Gemini analysis pass — the recomputable interpretation of one entry.
+/// Result of an analysis pass — the recomputable interpretation of one entry.
 class AnalysisResult {
   final String transcript;
   final String summary;

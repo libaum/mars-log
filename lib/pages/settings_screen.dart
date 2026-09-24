@@ -43,34 +43,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final _onDevice = getIt<OnDeviceAnalysisEngine>();
   bool _preparingModels = false;
 
-  Future<void> _editApiKey() async {
-    final current = await _settings.getApiKey() ?? '';
-    if (!mounted) return;
-    final controller = TextEditingController(text: current);
-    final result = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Gemini API-Key', style: TEXT_STYLE_SETTING),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          decoration: const InputDecoration(hintText: 'AIza…'),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, controller.text),
-            child: const Text('Save'),
-          ),
-        ],
-      ),
-    );
-    if (result != null) await _settings.setApiKey(result);
-  }
-
   Future<void> _doExport() async {
     try {
       await _export.exportAndShare();
@@ -205,10 +177,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     setState(() {});
   }
 
-  Future<void> _toggleAnalysisEngine(bool onDevice) async {
-    await _settings.setAnalysisEngine(onDevice ? 'on_device' : 'cloud');
-  }
-
   Future<void> _prepareOnDeviceModels() async {
     setState(() => _preparingModels = true);
     try {
@@ -217,7 +185,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _snack(
         nanoOk
             ? 'Whisper-Modell bereit, Gemini Nano verfügbar.'
-            : 'Whisper-Modell bereit, Gemini Nano ist auf diesem Gerät nicht verfügbar.',
+            : 'Whisper-Modell bereit, Gemini Nano ist gerade nicht verfügbar.',
       );
     } catch (e) {
       _snack('Vorbereitung fehlgeschlagen: $e');
@@ -271,13 +239,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       onTap: _themeManager.toggleTheme,
                     );
                   },
-                ),
-                ValueListenableBuilder<bool>(
-                  valueListenable: _settings.hasApiKeyNotifier,
-                  builder: (context, hasKey, _) => _actionRow(
-                    hasKey ? 'Gemini API key · Set' : 'Gemini API key',
-                    _editApiKey,
-                  ),
                 ),
                 ValueListenableBuilder<bool>(
                   valueListenable: _settings.pinEnabledNotifier,
@@ -342,25 +303,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     !_storage.getDeleteAudioAfterTranscription(),
                   ),
                 ),
-                ValueListenableBuilder<String>(
-                  valueListenable: _settings.analysisEngineNotifier,
-                  builder: (context, engine, _) => Column(
-                    children: [
-                      _toggleRow(
-                        'Offline-Modus (Beta)',
-                        'Analyse lokal via Whisper + Gemini Nano statt Cloud — experimentell, braucht ein unterstütztes Gerät',
-                        engine == 'on_device',
-                        () => _toggleAnalysisEngine(engine != 'on_device'),
-                      ),
-                      if (engine == 'on_device')
-                        _actionRow(
-                          _preparingModels
-                              ? 'Modelle werden vorbereitet…'
-                              : 'Modelle vorbereiten',
-                          _preparingModels ? () {} : _prepareOnDeviceModels,
-                        ),
-                    ],
-                  ),
+                // Analysis runs on the phone (Whisper + Gemini Nano); the
+                // first recording downloads Whisper by itself, this just
+                // does it ahead of time and checks Nano.
+                _actionRow(
+                  _preparingModels
+                      ? 'Modelle werden vorbereitet…'
+                      : 'Analyse-Modelle vorbereiten',
+                  _preparingModels ? () {} : _prepareOnDeviceModels,
                 ),
                 _actionRow('Export (share)', _doExport),
                 _actionRow('Export (save to device)', _doExportToDisk),

@@ -17,7 +17,7 @@ class OnDeviceAnalysisException implements Exception {
   String toString() => message;
 }
 
-/// On-device counterpart to [CloudAnalysisEngine]: transcribes audio locally
+/// The app's analysis engine: transcribes audio locally
 /// with Whisper (whisper.cpp via `whisper_ggml`), then runs the summary/mood/
 /// tags step through Gemini Nano on-device via AICore (`gemini_nano_android`).
 /// Gemini Nano itself only takes text, so audio always goes through Whisper
@@ -60,6 +60,9 @@ Transkript:
 
   @override
   Future<AnalysisResult> analyzeAudio(List<File> audioFiles) async {
+    // First use downloads the model (a few hundred MB, from Hugging Face, not
+    // Google). A no-op afterwards.
+    await ensureWhisperModelDownloaded();
     final transcripts = <String>[];
     for (final file in audioFiles) {
       if (!await file.exists()) {
@@ -118,6 +121,61 @@ Transkript:
               .toList() ??
           const [],
     );
+  }
+
+  static const _promptMonth = '''
+Du bist der Rückblick-Assistent einer Sprach-Tagebuch-App. Unten stehen die
+Zusammenfassungen der Tagebucheinträge eines Monats, in zeitlicher Reihenfolge.
+Schreib einen Rückblick auf den Monat in 4-6 Sätzen, aus der Du-Perspektive,
+warm und konkret: was ihn geprägt hat, wie sich die Stimmung entwickelt hat,
+was wiederkehrt. Nur der Text, keine Überschrift, kein Markdown.
+
+Einträge:
+''';
+
+  /// Nano's input window is small (a few thousand tokens), so a long month
+  /// is recapped in parts first and the parts are then recapped together.
+  static const _maxMonthChars = 6000;
+
+  @override
+  Future<String> summarizeMonth(List<String> summaries) async {
+    if (summaries.isEmpty) {
+      throw OnDeviceAnalysisException('Keine Einträge für diesen Monat.');
+    }
+    if (!await _nano.isAvailable()) {
+      throw OnDeviceAnalysisException('Gemini Nano ist gerade nicht verfügbar.');
+    }
+    final lines = summaries.map((s) => '- ${s.trim()}').toList();
+    if (lines.join('\n').length <= _maxMonthChars) {
+      return _recap(lines.join('\n'));
+    }
+    final parts = <String>[];
+    var chunk = <String>[];
+    var size = 0;
+    for (final line in lines) {
+      if (size + line.length > _maxMonthChars && chunk.isNotEmpty) {
+        parts.add(await _recap(chunk.join('\n')));
+        chunk = [];
+        size = 0;
+      }
+      chunk.add(line);
+      size += line.length + 1;
+    }
+    if (chunk.isNotEmpty) parts.add(await _recap(chunk.join('\n')));
+    return _recap(parts.map((p) => '- $p').join('\n'));
+  }
+
+  Future<String> _recap(String body) async {
+    final candidates = await _nano.generate(
+      prompt: '$_promptMonth$body',
+      temperature: 0.5,
+      maxOutputTokens: 256,
+    );
+    final text = candidates.isEmpty ? '' : candidates.first.trim();
+    if (text.isEmpty) {
+      throw OnDeviceAnalysisException('Gemini Nano lieferte keinen Rückblick.');
+    }
+    return text;
   }
 
   /// Gemini Nano has no schema enforcement — extract the first `{...}` block

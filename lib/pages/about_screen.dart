@@ -42,9 +42,9 @@ class AboutScreen extends StatelessWidget {
                     style: TextStyle(fontSize: 15, fontWeight: FontWeight.w300, color: primary, height: 1.7),
                   ),
                   const SizedBox(height: 16),
-                  // Honest disclosure: audio leaves the device for transcription.
                   const Text(
-                    'Voice recordings are transcribed by Google Gemini. '
+                    'Recordings are transcribed and analyzed on this phone '
+                    '(Whisper, Gemini Nano). No journal content goes to a cloud AI. '
                     'Map data by OpenStreetMap contributors.',
                     style: TextStyle(fontSize: 13, fontWeight: FontWeight.w300, color: COLOR_SECONDARY, height: 1.5),
                   ),

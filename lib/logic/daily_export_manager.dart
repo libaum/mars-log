@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:mars_log/data/export_service.dart';
 import 'package:mars_log/data/journal_repository.dart';
 import 'package:mars_log/data/local_storage_service.dart';
+import 'package:mars_log/data/location_history_repository.dart';
 import 'package:mars_log/logic/background_tasks.dart';
 import 'package:mars_log/services/service_locator.dart';
 import 'package:saf_stream/saf_stream.dart';
@@ -16,7 +17,8 @@ const _backupPrefix = 'mars_log_backup_';
 
 /// How many daily backups to keep. One file per day, so this is also how far
 /// back you can reach — long enough to notice something went wrong days after
-/// the fact, and the zips are small (transcripts and metadata, no audio).
+/// the fact, and the zips are small (transcripts, metadata and location
+/// history, no audio).
 const _keepBackups = 7;
 
 /// Best-effort daily backup zip, written into the SAF folder the user picked
@@ -30,7 +32,8 @@ Future<void> runDailyExport() async {
 
     // Read-only: the app may be running (and recording) in the other isolate.
     final repo = await JournalRepository.getInstance(readOnly: true);
-    final bytes = await ExportService(repo).buildZipBytes();
+    final locations = await LocationHistoryRepository.getInstance();
+    final bytes = await ExportService(repo, locations).buildZipBytes();
 
     final stamp = DateTime.now().toIso8601String().split('T').first;
     await SafStream().writeFileBytes(

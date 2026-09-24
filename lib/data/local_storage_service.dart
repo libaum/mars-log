@@ -14,7 +14,6 @@ class LocalStorageService {
   static const _keyDeleteAudioAfterTranscription =
       'delete_audio_after_transcription';
   static const _keyMonthReviewPrefix = 'month_review_';
-  static const _keyAnalysisEngine = 'analysis_engine';
   static const _keyLocationTrackingEnabled = 'location_tracking_enabled';
   static const _keyDailyExportEnabled = 'daily_export_enabled';
   static const _keyDailyExportFolderUri = 'daily_export_folder_uri';
@@ -85,13 +84,6 @@ class LocalStorageService {
       _prefs.getString('$_keyMonthReviewPrefix$monthKey');
   Future<void> setMonthReview(String monthKey, String text) =>
       _prefs.setString('$_keyMonthReviewPrefix$monthKey', text);
-
-  /// Which [AnalysisEngine] new recordings and plain "Neu analysieren" use:
-  /// 'cloud' (default) or 'on_device' (offline-analysis branch experiment).
-  String getAnalysisEngine() =>
-      _prefs.getString(_keyAnalysisEngine) ?? 'cloud';
-  Future<void> setAnalysisEngine(String v) =>
-      _prefs.setString(_keyAnalysisEngine, v);
 
   /// Background location tracking: a few GPS fixes a day, independent of
   /// journal entries (see [LocationTrackingManager]).

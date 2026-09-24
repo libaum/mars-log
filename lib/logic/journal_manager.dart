@@ -2,10 +2,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:mars_log/data/analysis_engine.dart';
-import 'package:mars_log/data/gemini_service.dart' show kAnalysisVersion;
 import 'package:mars_log/data/journal_repository.dart';
 import 'package:mars_log/data/local_storage_service.dart';
-import 'package:mars_log/data/on_device_analysis_service.dart';
 import 'package:mars_log/domain/journal_entry.dart';
 import 'package:mars_log/logic/analysis_task_service.dart';
 import 'package:mars_log/logic/location_service.dart';
@@ -14,22 +12,23 @@ import 'package:mars_log/services/service_locator.dart';
 
 /// Core state manager for the journal. Coordinates recording → entry creation →
 /// analysis, and exposes the live entry list to the UI. Analysis goes through
-/// whichever [AnalysisEngine] is currently selected in settings (cloud Gemini
-/// or, on the offline-analysis branch, on-device Whisper + Gemini Nano).
+/// the [AnalysisEngine] — on-device Whisper + Gemini Nano, nothing leaves the
+/// phone.
 class JournalManager {
   final _repo = getIt<JournalRepository>();
   final _storage = getIt<LocalStorageService>();
   final _location = getIt<LocationService>();
-  final _cloud = getIt<CloudAnalysisEngine>();
-  final _onDevice = getIt<OnDeviceAnalysisEngine>();
+  final _engine = getIt<AnalysisEngine>();
   final _task = getIt<AnalysisTaskService>();
 
   /// Ids of entries whose analysis is running right now, so [resumePending]
   /// doesn't start a second pass over one that is simply still working.
   final _inFlight = <String>{};
 
-  /// Failed entries already retried once in this app session — a network error
-  /// is worth one automatic retry, a loop of them is not.
+  /// Failed entries already retried once in this app session. Gemini Nano
+  /// refuses to run while the app is in the background, so an entry recorded
+  /// just before switching away fails — one automatic retry back in the
+  /// foreground fixes that; a loop of them would not help.
   final _retried = <String>{};
 
   late final ValueNotifier<List<JournalEntry>> entriesNotifier;
@@ -47,10 +46,6 @@ class JournalManager {
     entriesNotifier.value = _repo.entries;
     trashNotifier.value = _repo.deletedEntries;
   }
-
-  /// The engine currently selected in settings (defaults to cloud).
-  AnalysisEngine _activeEngine() =>
-      _storage.getAnalysisEngine() == 'on_device' ? _onDevice : _cloud;
 
   // ── Analysis ──────────────────────────────────────────────────────────────
   //
@@ -75,7 +70,7 @@ class JournalManager {
     await _repo.upsert(entry);
     _refresh();
     await _attachLocation(entry.id);
-    await _analyze(entry.id, _activeEngine());
+    await _analyze(entry.id, _engine);
   }
 
   /// Best-effort: stamp the entry with where it was recorded. Silent on failure.
@@ -96,7 +91,7 @@ class JournalManager {
   }
 
   /// Adds another recording to an existing entry instead of creating a
-  /// separate one for the same day. Only the new snippet is sent to Gemini
+  /// separate one for the same day. Only the new snippet goes through Whisper
   /// for transcription — the existing transcript is already known and isn't
   /// re-transcribed — then summary/mood/tags are recomputed from the merged
   /// text. The recording is kept as its own audio file alongside the
@@ -117,7 +112,7 @@ class JournalManager {
     await _repo.upsert(start);
     _refresh();
 
-    final engine = _activeEngine();
+    final engine = _engine;
     var orphaned = false;
     _inFlight.add(id);
     try {
@@ -158,18 +153,9 @@ class JournalManager {
     if (orphaned) await createFromAudio(rec);
   }
 
-  /// Re-runs analysis on an existing entry with the currently selected
-  /// engine; audio + previous data are kept until the new result overwrites
-  /// them.
-  Future<void> reanalyze(JournalEntry entry) => reanalyzeWith(
-        entry,
-        _activeEngine(),
-      );
-
-  /// Re-runs analysis with an explicitly chosen engine, regardless of the
-  /// global setting — lets the detail screen run the same entry through both
-  /// cloud and on-device for a direct comparison.
-  Future<void> reanalyzeWith(JournalEntry entry, AnalysisEngine engine) async {
+  /// Re-runs analysis on an existing entry; audio + previous data are kept
+  /// until the new result overwrites them.
+  Future<void> reanalyze(JournalEntry entry) async {
     final live = _repo.byId(entry.id);
     if (live == null) return;
     live
@@ -177,7 +163,7 @@ class JournalManager {
       ..errorMessage = null;
     await _repo.upsert(live);
     _refresh();
-    await _analyze(live.id, engine);
+    await _analyze(live.id, _engine);
   }
 
   Future<void> _analyze(String id, AnalysisEngine engine) async {
@@ -265,35 +251,19 @@ class JournalManager {
 
   /// Second line of defence behind the foreground service: if the process was
   /// killed (or frozen hard enough to kill the request) mid-analysis, the entry
-  /// is still sitting in `entries.json` as `analyzing` — or as `failed` with a
-  /// dropped connection. Called on app start and whenever the app comes back to
+  /// is still sitting in `entries.json` as `analyzing` — or as `failed`
+  /// because Nano refused to run in the background. Called on app start and whenever the app comes back to
   /// the foreground; picks those up and runs them again.
   Future<void> resumePending() async {
-    final engine = _activeEngine();
     for (final entry in _repo.entries) {
       if (_inFlight.contains(entry.id)) continue;
       if (entry.status == EntryStatus.analyzing) {
-        await _analyze(entry.id, engine);
-      } else if (entry.status == EntryStatus.failed &&
-          _isNetworkError(entry.errorMessage) &&
-          _retried.add(entry.id)) {
-        await _analyze(entry.id, engine);
+        await _analyze(entry.id, _engine);
+      } else if (entry.status == EntryStatus.failed && _retried.add(entry.id)) {
+        // On-device: a retry costs nothing but a few seconds.
+        await _analyze(entry.id, _engine);
       }
     }
-  }
-
-  /// A transport-level failure (frozen process, lost connection, timeout) is
-  /// worth retrying by itself; a rejected key or exhausted quota is not.
-  bool _isNetworkError(String? message) {
-    if (message == null) return false;
-    const markers = [
-      'Netzwerkfehler',
-      'Zeitüberschreitung',
-      'ClientException',
-      'SocketException',
-      'Connection closed',
-    ];
-    return markers.any(message.contains);
   }
 
   /// If the "delete audio after transcription" setting is on, marks the

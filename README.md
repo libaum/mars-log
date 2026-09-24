@@ -23,8 +23,9 @@ audio sent for transcription.
 
 ## Setup
 
-Transcription and analysis use Gemini, so Mars Log needs your own Gemini API key
-(entered once, kept in encrypted storage).
+Transcription and analysis run on the phone: Whisper (downloaded on first
+use) and Gemini Nano via Android AICore, which needs a supported device.
+No journal content goes to a cloud AI.
 
 ## Install
 
@@ -38,7 +39,7 @@ Transcription and analysis use Gemini, so Mars Log needs your own Gemini API key
 - GetIt (dependency injection)
 - ValueNotifier + ValueListenableBuilder (state)
 - SharedPreferences + flutter_secure_storage (local & encrypted persistence)
-- `record` (audio) · Gemini (transcript & analysis) · `local_auth` (unlock)
+- `record` (audio) · Whisper via `whisper_ggml` (transcript) · Gemini Nano on-device (analysis) · `local_auth` (unlock)
 
 ## Design
 

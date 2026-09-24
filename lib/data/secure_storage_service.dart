@@ -2,13 +2,10 @@ import 'dart:convert';
 import 'package:crypto/crypto.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
-/// Compile-time fallback key, supplied via
-/// `--dart-define-from-file=env.json` (or `--dart-define=GEMINI_API_KEY=...`).
-/// Empty when not provided, so the Settings key is used instead.
-const _envApiKey = String.fromEnvironment('GEMINI_API_KEY');
-
-/// Encrypted storage for sensitive values: the Gemini API key and the PIN hash.
+/// Encrypted storage for sensitive values: the PIN hash.
 class SecureStorageService {
+  /// Where the Gemini API key lived while analysis went to the cloud. Only
+  /// read to delete it — see [forgetLegacyApiKey].
   static const _keyApiKey = 'gemini_api_key';
   static const _keyPinHash = 'pin_hash';
 
@@ -19,14 +16,13 @@ class SecureStorageService {
           aOptions: AndroidOptions(encryptedSharedPreferences: true),
         );
 
-  /// Prefers a key set in Settings; falls back to the compile-time [_envApiKey].
-  Future<String?> getApiKey() async {
-    final stored = await _storage.read(key: _keyApiKey);
-    if (stored != null && stored.isNotEmpty) return stored;
-    return _envApiKey.isNotEmpty ? _envApiKey : null;
+  /// Analysis runs on-device now; a key left over from the cloud days has
+  /// no use and shouldn't linger. Idempotent, best-effort.
+  Future<void> forgetLegacyApiKey() async {
+    try {
+      await _storage.delete(key: _keyApiKey);
+    } catch (_) {}
   }
-  Future<void> setApiKey(String key) =>
-      _storage.write(key: _keyApiKey, value: key.trim());
 
   Future<bool> hasPin() async => (await _storage.read(key: _keyPinHash)) != null;
 
