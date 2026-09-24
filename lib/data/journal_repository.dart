@@ -9,7 +9,9 @@ import 'package:mars_log/domain/journal_entry.dart';
 /// about entries that no longer exist here. Null on a device without sync —
 /// then a purge is simply local.
 abstract class PurgeTrace {
-  void recordPurged(Set<String> ids);
+  /// [stamps]: id → the time the tombstone competes with in last-write-wins.
+  /// Not necessarily now — see [JournalRepository._purgeExpired].
+  void recordPurged(Map<String, DateTime> stamps);
 }
 
 /// Owns the on-disk journal: `entries.json` (the index) and the `audio/` folder.
@@ -40,11 +42,27 @@ class JournalRepository {
   /// a mutation added later cannot forget to stamp itself.
   void _stamp(JournalEntry entry) => entry.changedAt = DateTime.now();
 
-  void _tracePurge(Iterable<JournalEntry> gone) {
+  /// [stamp] picks each tombstone's last-write-wins time.
+  void _tracePurge(
+    Iterable<JournalEntry> gone,
+    DateTime Function(JournalEntry e) stamp,
+  ) {
     final trace = _purgeTrace;
     if (trace == null || gone.isEmpty) return;
-    trace.recordPurged(gone.map((e) => e.id).toSet());
+    trace.recordPurged({for (final e in gone) e.id: stamp(e)});
   }
+
+  /// The stored object for [entry]'s id. Callers hold entries across awaits
+  /// — a dialog, a model call, a GPS fix — while a sync round may replace
+  /// the stored object with a version edited elsewhere. Mutating and writing
+  /// the held one would put stale fields back with a fresh stamp, and that
+  /// stale version would then win everywhere. So every edit below works on
+  /// the stored object, whatever the caller passes in.
+  ///
+  /// Null if the entry was purged meanwhile (here, or by a tombstone from
+  /// another device). The edit is then dropped: writing the held object
+  /// would bring the entry back with a fresh stamp, beating the purge.
+  JournalEntry? _live(JournalEntry entry) => byId(entry.id);
 
   JournalRepository._(this._purgeTrace);
 
@@ -118,9 +136,18 @@ class JournalRepository {
     revision.value++;
   }
 
+  /// Stores [entry] as the new truth for its id. It must be the stored
+  /// object itself (or a new id): passing a copy held from before a sync
+  /// round would silently undo that round — the edit methods below resolve
+  /// the stored object for exactly that reason.
   Future<void> upsert(JournalEntry entry) async {
-    _stamp(entry);
     final i = _entries.indexWhere((e) => e.id == entry.id);
+    assert(
+      i < 0 || identical(_entries[i], entry),
+      'upsert() with a stale JournalEntry ${entry.id}: re-read it with '
+      'byId() after any await, or use edit()/setDay()',
+    );
+    _stamp(entry);
     if (i >= 0) {
       _entries[i] = entry;
     } else {
@@ -134,31 +161,39 @@ class JournalRepository {
   /// Sets [JournalEntry.deletedAt] synchronously (so [entries] hides it in the
   /// same frame) and returns the persistence future.
   Future<void> moveToTrash(JournalEntry entry) {
-    entry.deletedAt = DateTime.now();
-    _stamp(entry);
+    final live = _live(entry);
+    if (live == null) return Future.value();
+    live.deletedAt = DateTime.now();
+    _stamp(live);
     return _persist();
   }
 
   /// Bring a trashed entry back into the active timeline.
   Future<void> restore(JournalEntry entry) async {
-    entry.deletedAt = null;
-    _stamp(entry);
+    final live = _live(entry);
+    if (live == null) return;
+    live.deletedAt = null;
+    _stamp(live);
     _sort();
     await _persist();
   }
 
   /// Permanently remove one entry (and its audio). Irreversible.
   Future<void> purge(JournalEntry entry) async {
-    _tracePurge([entry]);
-    _entries.removeWhere((e) => e.id == entry.id);
+    final live = _live(entry);
+    if (live == null) return; // already gone, audio included
+    // A user action: it is the newest intent, so it competes as "now".
+    _tracePurge([live], (_) => DateTime.now());
+    _entries.removeWhere((e) => e.id == live.id);
     await _persist();
-    await _deleteAudio(entry);
+    await _deleteAudio(live);
   }
 
   /// Permanently remove every trashed entry (and its audio). Irreversible.
   Future<void> emptyTrash() async {
     final trashed = _entries.where((e) => e.deletedAt != null).toList();
-    _tracePurge(trashed);
+    final now = DateTime.now();
+    _tracePurge(trashed, (_) => now);
     _entries.removeWhere((e) => e.deletedAt != null);
     await _persist();
     for (final e in trashed) {
@@ -173,9 +208,14 @@ class JournalRepository {
         e.deletedAt != null && e.deletedAt!.isBefore(cutoff);
     final gone = _entries.where(expired).toList();
     if (gone.isEmpty) return;
-    // Both devices run the same 30-day rule and will each produce this
-    // tombstone. Harmless: applying it twice is a no-op.
-    _tracePurge(gone);
+    // Nobody pressed anything, so this tombstone must not compete as "now":
+    // a restore made on another device on day 29 — which this device hasn't
+    // pulled yet, because loading runs before the first sync — would lose to
+    // it. It competes as one millisecond after the entry's last known
+    // change: newer than the trashed version (so it propagates), older than
+    // any later restore or edit elsewhere (so those win). Every device
+    // computes the same stamp, so the duplicate tombstones agree.
+    _tracePurge(gone, (e) => e.changedAt.add(const Duration(milliseconds: 1)));
     _entries.removeWhere(expired);
     await _persist();
     for (final e in gone) {
@@ -193,7 +233,10 @@ class JournalRepository {
   /// the user opts to drop audio after transcription, or when a newly
   /// recorded snippet's audio is folded into the transcript instead of being
   /// kept). The caller sets [JournalEntry.audioDeleted] / clears the list.
-  Future<void> discardAudio(JournalEntry entry) => _deleteAudio(entry);
+  Future<void> discardAudio(JournalEntry entry) async {
+    final live = _live(entry);
+    if (live != null) await _deleteAudio(live);
+  }
 
   /// Deletes a single standalone audio file by name.
   Future<void> deleteAudioFile(String fileName) async {
@@ -232,8 +275,10 @@ class JournalRepository {
 
   /// Moves an entry to a different day (e.g. backdating). Re-sorts.
   Future<void> setDay(JournalEntry entry, DateTime day) async {
-    entry.day = DateTime(day.year, day.month, day.day);
-    await upsert(entry);
+    final live = _live(entry);
+    if (live == null) return;
+    live.day = DateTime(day.year, day.month, day.day);
+    await upsert(live);
   }
 
   /// Sets or clears the location label (also works on old entries).
@@ -266,16 +311,18 @@ class JournalRepository {
     String? place,
     List<String>? tags,
   }) async {
-    if (transcript != null) entry.transcript = transcript;
-    if (summary != null) entry.summary = summary;
+    final live = _live(entry);
+    if (live == null) return;
+    if (transcript != null) live.transcript = transcript;
+    if (summary != null) live.summary = summary;
     if (place != null) {
       final trimmed = place.trim();
-      entry.place = trimmed.isEmpty ? null : trimmed;
+      live.place = trimmed.isEmpty ? null : trimmed;
     }
     if (tags != null) {
-      entry.tags = tags.map((t) => t.trim()).where((t) => t.isNotEmpty).toList();
+      live.tags = tags.map((t) => t.trim()).where((t) => t.isNotEmpty).toList();
     }
-    await upsert(entry);
+    await upsert(live);
   }
 
   /// Writes the outcome of a sync round: [upserts] replace or add entries by
@@ -287,10 +334,7 @@ class JournalRepository {
   /// engine resolved conflicts against a snapshot from the start of its round,
   /// and the user may have typed something while the round was in flight.
   ///
-  /// Audio is never carried by sync. An entry arriving from the phone lists
-  /// [JournalEntry.audioFileNames] that simply do not exist here; playback
-  /// checks the file, so the list stays as metadata and remains correct if
-  /// the entry ever travels back.
+  /// Audio is never carried by sync, only its metadata — see [_mergeAudio].
   Future<void> applySynced(
     List<JournalEntry> upserts,
     Map<String, DateTime> removed,
@@ -308,11 +352,7 @@ class JournalRepository {
             jsonEncode(local.toJson()) == jsonEncode(incoming.toJson())) {
           continue;
         }
-        // Keep the audio this device actually holds: the remote copy has no
-        // files, and its list would otherwise orphan them into deletion.
-        if (local.audioFileNames.isNotEmpty && !incoming.audioDeleted) {
-          incoming.audioFileNames = local.audioFileNames;
-        }
+        _mergeAudio(local, incoming);
         _entries[i] = incoming;
       } else {
         _entries.add(incoming);
@@ -336,6 +376,33 @@ class JournalRepository {
     for (final e in purged) {
       await _deleteAudio(e);
     }
+  }
+
+  /// Audio state belongs to the device that holds the files; sync carries it
+  /// as metadata only, so an incoming version can be behind in either
+  /// direction:
+  ///
+  /// - This device holds files the remote copy doesn't list (a recording
+  ///   added here meanwhile): keep the local list, or the orphan sweep on the
+  ///   next start deletes the new recording.
+  /// - This device discarded its audio, the remote copy still lists it: stay
+  ///   discarded (it only ever goes one way), or the entry points at files
+  ///   that no longer exist.
+  ///
+  /// A device holding none of the files — the laptop — takes the remote list
+  /// as it is; that's how it learns about a second recording.
+  ///
+  /// Synchronous file checks on purpose: [applySynced] must not yield between
+  /// finding an entry's slot and replacing it.
+  void _mergeAudio(JournalEntry local, JournalEntry incoming) {
+    if (local.audioDeleted) incoming.audioDeleted = true;
+    if (incoming.audioDeleted) {
+      incoming.audioFileNames = [];
+      return;
+    }
+    final holdsFiles =
+        local.audioFileNames.any((f) => File(audioPath(f)).existsSync());
+    if (holdsFiles) incoming.audioFileNames = local.audioFileNames;
   }
 
   File get indexFile => File(_indexPath);

@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
 import 'package:mars_log/data/analysis_engine.dart';
@@ -57,8 +58,16 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
       await _player.pause();
       setState(() => _playingIndex = null);
     } else {
-      await _player
-          .play(DeviceFileSource(_repo.audioPath(entry.audioFileNames[index])));
+      final path = _repo.audioPath(entry.audioFileNames[index]);
+      if (!await File(path).exists()) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Audiodatei nicht mehr vorhanden')),
+          );
+        }
+        return;
+      }
+      await _player.play(DeviceFileSource(path));
       setState(() {
         _playingEntryId = entry.id;
         _playingIndex = index;

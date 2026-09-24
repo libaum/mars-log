@@ -11,12 +11,12 @@ class SyncPurgeTrace implements PurgeTrace {
   SyncPurgeTrace(this._storage);
 
   @override
-  void recordPurged(Set<String> ids) {
+  void recordPurged(Map<String, DateTime> stamps) {
     final purged = _storage.getSyncPurged();
     final now = DateTime.now();
-    for (final id in ids) {
-      purged[id] = now;
-    }
+    stamps.forEach((id, stamp) {
+      purged[id] = PurgeMark(stamp: stamp, recorded: now);
+    });
     // Fire-and-forget like every other prefs write in the app: the in-memory
     // prefs cache updates synchronously, so the next round sees it.
     _storage.setSyncPurged(purged);

@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:mars_log/data/analysis_engine.dart';
@@ -51,6 +52,16 @@ class JournalManager {
   AnalysisEngine _activeEngine() =>
       _storage.getAnalysisEngine() == 'on_device' ? _onDevice : _cloud;
 
+  // ── Analysis ──────────────────────────────────────────────────────────────
+  //
+  // Every path here waits seconds on the network (the model) or the GPS, and
+  // a sync round may run meanwhile and replace the entry with a version
+  // edited on the laptop. So no path holds a JournalEntry across an await:
+  // it keeps the id, re-reads the entry afterwards, and writes only what it
+  // owns — see [_applyResult]. Writing the held object back would undo the
+  // laptop's edit with a fresh stamp, and that stale version would then win
+  // on every device.
+
   /// Creates a provisional (analyzing) entry immediately, then analyses it.
   Future<void> createFromAudio(RecordingResult rec) async {
     final entry = JournalEntry(
@@ -62,19 +73,24 @@ class JournalManager {
     );
     await _repo.upsert(entry);
     _refresh();
-    await _attachLocation(entry);
-    await _analyze(entry, _activeEngine());
+    await _attachLocation(entry.id);
+    await _analyze(entry.id, _activeEngine());
   }
 
   /// Best-effort: stamp the entry with where it was recorded. Silent on failure.
-  Future<void> _attachLocation(JournalEntry entry) async {
+  Future<void> _attachLocation(String id) async {
+    final placeBefore = _repo.byId(id)?.place;
     final loc = await _location.current();
     if (loc == null) return;
-    entry
+    final live = _repo.byId(id);
+    // Gone, or given a place by hand while the GPS was searching — the
+    // manual one is the newer intent.
+    if (live == null || live.place != placeBefore) return;
+    live
       ..latitude = loc.latitude
       ..longitude = loc.longitude
       ..place = loc.place;
-    await _repo.upsert(entry);
+    await _repo.upsert(live);
     _refresh();
   }
 
@@ -86,49 +102,55 @@ class JournalManager {
   /// entry's other ones (unless the entry's audio was already discarded, in
   /// which case the new snippet's audio is dropped too, once transcribed).
   Future<void> appendRecording(JournalEntry entry, RecordingResult rec) async {
-    entry.status = EntryStatus.analyzing;
-    entry.errorMessage = null;
-    await _repo.upsert(entry);
+    final id = entry.id;
+    final start = _repo.byId(id);
+    // Purged (here or elsewhere) while recording: the recording must not be
+    // lost, so it becomes an entry of its own.
+    if (start == null) return createFromAudio(rec);
+    start
+      ..status = EntryStatus.analyzing
+      ..errorMessage = null;
+    await _repo.upsert(start);
     _refresh();
 
     final engine = _activeEngine();
-    _inFlight.add(entry.id);
+    var orphaned = false;
+    _inFlight.add(id);
     try {
       await _task.run(() async {
         final partial = await engine
             .analyzeAudio([File(_repo.audioPath(rec.fileName))]);
-        entry.transcript = [entry.transcript, partial.transcript]
+        final live = _repo.byId(id);
+        if (live == null) {
+          orphaned = true;
+          return;
+        }
+        // Appended to the transcript as stored *now*: a correction made on
+        // the laptop while this snippet was transcribed stays.
+        live.transcript = [live.transcript, partial.transcript]
             .where((t) => t != null && t.isNotEmpty)
             .join('\n\n');
-
-        if (entry.audioDeleted) {
-          await _repo.deleteAudioFile(rec.fileName);
-        } else {
-          entry.audioFileNames.add(rec.fileName);
+        final dropSnippet = live.audioDeleted;
+        if (!dropSnippet) {
+          live.audioFileNames = [...live.audioFileNames, rec.fileName];
         }
+        // Written before the file is touched: no await between re-reading
+        // [live] and writing it.
+        await _repo.upsert(live);
+        if (dropSnippet) await _repo.deleteAudioFile(rec.fileName);
 
-        final result = await engine.analyzeText(entry.transcript!);
-        entry
-          ..summary = result.summary
-          ..moodLabel = result.moodLabel
-          ..moodScore = result.moodScore
-          ..dimensions = result.dimensions
-          ..tags = result.tags
-          ..analysisModel = engine.modelName
-          ..analysisVersion = kAnalysisVersion
-          ..errorMessage = null
-          ..status = EntryStatus.ready;
-        await _maybeDiscardAudio(entry);
+        final before = _snapshot(live);
+        final result = await engine.analyzeText(before.transcript!);
+        await _applyResult(id, before, result, engine.modelName,
+            withTranscript: false);
       });
     } catch (e) {
-      entry
-        ..status = EntryStatus.failed
-        ..errorMessage = e.toString();
+      await _markFailed(id, e);
     } finally {
-      _inFlight.remove(entry.id);
+      _inFlight.remove(id);
     }
-    await _repo.upsert(entry);
     _refresh();
+    if (orphaned) await createFromAudio(rec);
   }
 
   /// Re-runs analysis on an existing entry with the currently selected
@@ -143,49 +165,98 @@ class JournalManager {
   /// global setting — lets the detail screen run the same entry through both
   /// cloud and on-device for a direct comparison.
   Future<void> reanalyzeWith(JournalEntry entry, AnalysisEngine engine) async {
-    entry.status = EntryStatus.analyzing;
-    entry.errorMessage = null;
-    await _repo.upsert(entry);
+    final live = _repo.byId(entry.id);
+    if (live == null) return;
+    live
+      ..status = EntryStatus.analyzing
+      ..errorMessage = null;
+    await _repo.upsert(live);
     _refresh();
-    await _analyze(entry, engine);
+    await _analyze(live.id, engine);
   }
 
-  Future<void> _analyze(JournalEntry entry, AnalysisEngine engine) async {
-    _inFlight.add(entry.id);
+  Future<void> _analyze(String id, AnalysisEngine engine) async {
+    final start = _repo.byId(id);
+    if (start == null) return;
+    final before = _snapshot(start);
+    _inFlight.add(id);
     try {
       await _task.run(() async {
         // Once the audio is gone, the transcript is the only source to work
         // from.
-        final result = entry.audioDeleted
-            ? await engine.analyzeText(entry.transcript ?? '')
+        final result = before.audioDeleted
+            ? await engine.analyzeText(before.transcript ?? '')
             : await engine.analyzeAudio(
-                entry.audioFileNames
+                before.audioFileNames
                     .map((f) => File(_repo.audioPath(f)))
                     .toList(),
               );
-        entry
-          ..transcript = result.transcript
-          ..summary = result.summary
-          ..moodLabel = result.moodLabel
-          ..moodScore = result.moodScore
-          ..dimensions = result.dimensions
-          ..tags = result.tags
-          ..analysisModel = engine.modelName
-          ..analysisVersion = kAnalysisVersion
-          ..errorMessage = null
-          ..status = EntryStatus.ready;
-        await _maybeDiscardAudio(entry);
+        await _applyResult(id, before, result, engine.modelName,
+            withTranscript: true);
       });
     } catch (e) {
-      entry
-        ..status = EntryStatus.failed
-        ..errorMessage = e.toString();
+      await _markFailed(id, e);
     } finally {
-      _inFlight.remove(entry.id);
+      _inFlight.remove(id);
     }
-    await _repo.upsert(entry);
     _refresh();
   }
+
+  /// Writes an analysis result onto the entry *as stored now*. Field by
+  /// field, a value is only written if the field still holds what it held in
+  /// [before] — when the analysis started. A correction made by hand in the
+  /// meantime (here or on the laptop) is newer intent than an automatic
+  /// result and stays. Status and model metadata are the analysis' own and
+  /// always written.
+  Future<void> _applyResult(
+    String id,
+    JournalEntry before,
+    AnalysisResult result,
+    String model, {
+    required bool withTranscript,
+  }) async {
+    final live = _repo.byId(id);
+    if (live == null) return; // purged meanwhile: nothing left to annotate
+    void put<T>(T Function(JournalEntry e) field, void Function(T v) write, T value) {
+      if (_same(field(live), field(before))) write(value);
+    }
+
+    if (withTranscript) {
+      put<String?>((e) => e.transcript, (v) => live.transcript = v, result.transcript);
+    }
+    put<String?>((e) => e.summary, (v) => live.summary = v, result.summary);
+    put<String?>((e) => e.moodLabel, (v) => live.moodLabel = v, result.moodLabel);
+    put<double?>((e) => e.moodScore, (v) => live.moodScore = v, result.moodScore);
+    put<Map<String, int>?>((e) => e.dimensions, (v) => live.dimensions = v, result.dimensions);
+    put<List<String>>((e) => e.tags, (v) => live.tags = v, result.tags);
+    live
+      ..analysisModel = model
+      ..analysisVersion = kAnalysisVersion
+      ..errorMessage = null
+      ..status = EntryStatus.ready;
+    final discard = _takeAudioIfDiscarding(live);
+    await _repo.upsert(live);
+    // Files go after the write: no await between re-reading [live] and
+    // writing it. A crash in between leaves orphans the startup sweep removes.
+    for (final f in discard) {
+      await _repo.deleteAudioFile(f);
+    }
+  }
+
+  Future<void> _markFailed(String id, Object error) async {
+    final live = _repo.byId(id);
+    if (live == null) return;
+    live
+      ..status = EntryStatus.failed
+      ..errorMessage = error.toString();
+    await _repo.upsert(live);
+  }
+
+  /// A detached copy to compare against after an await.
+  static JournalEntry _snapshot(JournalEntry e) =>
+      JournalEntry.fromJson(jsonDecode(jsonEncode(e.toJson())) as Map<String, dynamic>);
+
+  static bool _same(Object? a, Object? b) => jsonEncode(a) == jsonEncode(b);
 
   /// Second line of defence behind the foreground service: if the process was
   /// killed (or frozen hard enough to kill the request) mid-analysis, the entry
@@ -197,11 +268,11 @@ class JournalManager {
     for (final entry in _repo.entries) {
       if (_inFlight.contains(entry.id)) continue;
       if (entry.status == EntryStatus.analyzing) {
-        await _analyze(entry, engine);
+        await _analyze(entry.id, engine);
       } else if (entry.status == EntryStatus.failed &&
           _isNetworkError(entry.errorMessage) &&
           _retried.add(entry.id)) {
-        await _analyze(entry, engine);
+        await _analyze(entry.id, engine);
       }
     }
   }
@@ -220,14 +291,17 @@ class JournalManager {
     return markers.any(message.contains);
   }
 
-  /// If the "delete audio after transcription" setting is on, drop the audio now
-  /// that a transcript exists. Only fires on a successful, audio-backed pass.
-  Future<void> _maybeDiscardAudio(JournalEntry entry) async {
-    if (entry.audioDeleted) return;
-    if (!_storage.getDeleteAudioAfterTranscription()) return;
-    await _repo.discardAudio(entry);
-    entry.audioDeleted = true;
-    entry.audioFileNames = [];
+  /// If the "delete audio after transcription" setting is on, marks the
+  /// audio discarded now that a transcript exists and returns the files the
+  /// caller deletes once the entry is written. Synchronous on purpose.
+  List<String> _takeAudioIfDiscarding(JournalEntry entry) {
+    if (entry.audioDeleted) return const [];
+    if (!_storage.getDeleteAudioAfterTranscription()) return const [];
+    final files = entry.audioFileNames;
+    entry
+      ..audioDeleted = true
+      ..audioFileNames = [];
+    return files;
   }
 
   /// Soft-delete: moves an entry to the trash (recoverable). Marks it deleted

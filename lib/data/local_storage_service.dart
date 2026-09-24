@@ -123,27 +123,36 @@ class LocalStorageService {
 
   // ── Sync ─────────────────────────────────────────────────────────────────
 
-  /// Ids of entries permanently removed, with the time it happened. Once an
-  /// entry is purged it is gone from the index, so this is the only trace the
-  /// sync layer has left to tell other devices to drop their copy. Pruned
-  /// again after a successful sync.
-  Map<String, DateTime> getSyncPurged() {
+  /// Purged entries whose tombstone hasn't been pushed yet. Once an entry is
+  /// purged it is gone from the index, so this is the only trace the sync
+  /// layer has left to tell other devices to drop their copy. Pruned after
+  /// a successful push.
+  Map<String, PurgeMark> getSyncPurged() {
     final json = _prefs.getString(_keySyncPurged);
     if (json == null) return {};
     try {
       final map = jsonDecode(json) as Map<String, dynamic>;
-      return map.map(
-        (id, ms) => MapEntry(id, DateTime.fromMillisecondsSinceEpoch(ms as int)),
-      );
+      return map.map((id, v) {
+        DateTime at(Object? ms) => DateTime.fromMillisecondsSinceEpoch(ms as int);
+        // A bare number is the one-time format from before stamp and
+        // recording time were split.
+        return MapEntry(
+          id,
+          v is List
+              ? PurgeMark(stamp: at(v[0]), recorded: at(v[1]))
+              : PurgeMark(stamp: at(v), recorded: at(v)),
+        );
+      });
     } catch (_) {
       return {};
     }
   }
 
-  Future<void> setSyncPurged(Map<String, DateTime> purged) async {
-    final json = jsonEncode(
-      purged.map((id, at) => MapEntry(id, at.millisecondsSinceEpoch)),
-    );
+  Future<void> setSyncPurged(Map<String, PurgeMark> purged) async {
+    final json = jsonEncode(purged.map((id, m) => MapEntry(id, [
+          m.stamp.millisecondsSinceEpoch,
+          m.recorded.millisecondsSinceEpoch,
+        ])));
     await _prefs.setString(_keySyncPurged, json);
   }
 
@@ -189,4 +198,17 @@ class LocalStorageService {
       await _prefs.setString(_keySyncLastSeenHubId, hubId);
     }
   }
+}
+
+/// A purge waiting to be pushed as a tombstone.
+///
+/// [stamp] is the time the tombstone competes with in last-write-wins;
+/// [recorded] is when this device made it. They differ for the automatic
+/// 30-day purge, whose stamp lies in the past on purpose. The push watermark
+/// is compared against [recorded] — against [stamp], such a tombstone would
+/// sit behind the watermark from birth and never be pushed.
+class PurgeMark {
+  final DateTime stamp;
+  final DateTime recorded;
+  const PurgeMark({required this.stamp, required this.recorded});
 }

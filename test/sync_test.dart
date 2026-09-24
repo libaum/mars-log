@@ -10,26 +10,31 @@ import 'package:mars_log/sync/sync_purge_trace.dart';
 import 'package:mars_sync/mars_sync.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// Hub with the real hub's write rule (server-side LWW, seq per accepted
-/// write). Same semantics as mars_sync's engine-test fake, minus the limits
-/// these tests don't exercise.
+/// Hub with the real hub's write rule (server-side LWW, one seq counter
+/// across modules, rows per module). Same semantics as mars_sync's
+/// engine-test fake, minus the limits these tests don't exercise.
 class FakeHub {
   final _rows = <String, SyncItem>{};
   var _seq = 0;
 
+  static String _key(String module, String id) => '$module/$id';
+
   void push(String deviceId, List<SyncItem> items) {
     for (final item in items) {
-      final stored = _rows[item.itemId];
+      final key = _key(item.moduleId, item.itemId);
+      final stored = _rows[key];
       final accept = stored == null ||
           item.updatedAtMs > stored.updatedAtMs ||
           (item.updatedAtMs == stored.updatedAtMs &&
               item.deviceId.compareTo(stored.deviceId) >= 0);
-      if (accept) _rows[item.itemId] = item.copyWith(seq: ++_seq);
+      if (accept) _rows[key] = item.copyWith(seq: ++_seq);
     }
   }
 
-  PullResult pull(int sinceSeq) {
-    final page = _rows.values.where((r) => r.seq! > sinceSeq).toList()
+  PullResult pull(String module, int sinceSeq) {
+    final page = _rows.values
+        .where((r) => r.moduleId == module && r.seq! > sinceSeq)
+        .toList()
       ..sort((a, b) => a.seq!.compareTo(b.seq!));
     return PullResult(
       items: page,
@@ -39,7 +44,7 @@ class FakeHub {
     );
   }
 
-  SyncItem? row(String id) => _rows[id];
+  SyncItem? row(String id, {String module = 'mars_log'}) => _rows[_key(module, id)];
 }
 
 class FakeTransport implements SyncTransport {
@@ -56,7 +61,7 @@ class FakeTransport implements SyncTransport {
 
   @override
   Future<PullResult> pull(String moduleId, {required int sinceSeq}) async =>
-      hub.pull(sinceSeq);
+      hub.pull(moduleId, sinceSeq);
 }
 
 /// One device: its own journal directory and its own prefs. Every [run] is
@@ -122,6 +127,22 @@ JournalEntry entry(
 /// Timestamps are ms-resolution on the wire; two edits inside one ms would
 /// tie and fall to the device-id tie-break instead of "later wins".
 Future<void> tick() => Future<void>.delayed(const Duration(milliseconds: 5));
+
+/// A sync round on a journal that is already open — for rounds that must run
+/// *during* something else on the same device (an analysis, an edit).
+Future<SyncResult> syncLive(
+  String id,
+  JournalRepository journal,
+  LocalStorageService storage,
+  FakeHub hub,
+  SyncEncryptor key,
+) =>
+    MarsSyncEngine(
+      repository:
+          JournalSyncRepository(journal: journal, storage: storage, deviceId: id),
+      client: FakeTransport(hub, id),
+      encryptor: key,
+    ).syncNow();
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -204,13 +225,31 @@ void main() {
       });
     });
 
-    test('an echo of our own push does not rewrite the journal', () async {
-      await phone.run((journal, _) async {
-        final e = entry('a');
-        await journal.upsert(e);
-        final echo = JournalEntry.fromJson(jsonDecode(jsonEncode(e.toJson())));
+    test('our own push coming back does not rewrite the journal', () async {
+      // The real path: the echo arrives with the stamp truncated to ms (UTC),
+      // so the local, finer stamp is *after* it and it is skipped as older.
+      await phone.run((journal, _) => journal.upsert(entry('a')));
+      await phone.sync(hub, key);
+      await phone.run((journal, storage) async {
+        await storage.setSyncPullWatermark(seq: null, hubId: null);
         final before = journal.revision.value;
-        await journal.applySynced([echo], {});
+        await syncLive('phone', journal, storage, hub, key);
+        expect(journal.revision.value, before);
+      });
+    });
+
+    test('an entry received earlier and pulled again does not rewrite the journal',
+        () async {
+      // Received entries carry the hub's ms stamp, so a second pull (after a
+      // re-pair) meets the same stamp — the same-content check is what
+      // stops the rewrite here.
+      await phone.run((journal, _) => journal.upsert(entry('a')));
+      await phone.sync(hub, key);
+      await laptop.sync(hub, key);
+      await laptop.run((journal, storage) async {
+        await storage.setSyncPullWatermark(seq: null, hubId: null);
+        final before = journal.revision.value;
+        await syncLive('laptop', journal, storage, hub, key);
         expect(journal.revision.value, before);
       });
     });
@@ -392,6 +431,88 @@ void main() {
       final stored = jsonEncode(hub.row('a')!.payload);
       expect(stored, isNot(contains('sehr privat')));
       expect(hub.row('a')!.payload.keys, ['ciphertext']);
+    });
+  });
+
+  group('review 2026-09-24', () {
+    // older version (audioDeleted=false, old list) with a newer stamp.
+    test('M4: phone never ends up pointing at audio it discarded', () async {
+      await phone.run((journal, _) async {
+        await phone.audio('a.wav').create(recursive: true);
+        await journal.upsert(entry('a', audio: ['a.wav']));
+      });
+      await phone.sync(hub, key);
+      await laptop.sync(hub, key);
+
+      await tick();
+      await phone.run((journal, _) async {
+        final e = journal.byId('a')!;
+        await journal.discardAudio(e);
+        e
+          ..audioDeleted = true
+          ..audioFileNames = [];
+        await journal.upsert(e);
+      });
+      await tick();
+      await laptop.run((lj, _) => lj.setPlace(lj.byId('a')!, 'Wien'));
+      await laptop.sync(hub, key);
+      await phone.sync(hub, key);
+
+      await phone.run((journal, _) async {
+        final e = journal.byId('a')!;
+        expect(e.place, 'Wien');
+        final dangling = [
+          for (final f in e.audioFileNames)
+            if (!await phone.audio(f).exists()) f,
+        ];
+        expect(e.audioDeleted, isTrue, reason: 'audioDeleted flipped back');
+        expect(dangling, isEmpty, reason: 'entry lists files that do not exist');
+      });
+    });
+
+    // list is non-empty it never takes the phone's list again.
+    test('L1: a recording added on the phone shows up in the laptop metadata', () async {
+      await phone.run((journal, _) async {
+        await phone.audio('a.wav').create(recursive: true);
+        await journal.upsert(entry('a', audio: ['a.wav']));
+      });
+      await phone.sync(hub, key);
+      await laptop.sync(hub, key);
+
+      await tick();
+      await phone.run((journal, _) async {
+        await phone.audio('b.wav').create(recursive: true);
+        await journal.upsert(journal.byId('a')!..audioFileNames = ['a.wav', 'b.wav']);
+      });
+      await phone.sync(hub, key);
+      await laptop.sync(hub, key);
+      await laptop.run((lj, _) async {
+        expect(lj.byId('a')!.audioFileNames, ['a.wav', 'b.wav']);
+      });
+    });
+
+    // other device that happened in between.
+    test('M3: a restore on the laptop beats a later automatic 30-day purge', () async {
+      final trashedAt = DateTime.now().subtract(const Duration(days: 31));
+      final e = entry('a', deletedAt: trashedAt)..changedAt = trashedAt;
+      // Both devices hold the trashed entry (as after an earlier sync).
+      for (final d in [phone, laptop]) {
+        await d.dir.create(recursive: true);
+        await File('${d.dir.path}/entries.json').writeAsString(jsonEncode([e.toJson()]));
+      }
+      // Laptop: user restores it. Written directly so the laptop's own load
+      // doesn't auto-purge first: restore happened on day 29 in reality.
+      final restored = JournalEntry.fromJson(e.toJson())
+        ..deletedAt = null
+        ..changedAt = DateTime.now().subtract(const Duration(minutes: 5));
+      await File('${laptop.dir.path}/entries.json')
+          .writeAsString(jsonEncode([restored.toJson()]));
+
+      await phone.sync(hub, key); // load → auto-purge → tombstone(now)
+      await laptop.sync(hub, key);
+      await laptop.run((lj, _) async {
+        expect(lj.byId('a'), isNotNull, reason: 'deliberate restore lost to auto-purge');
+      });
     });
   });
 }

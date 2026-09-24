@@ -53,15 +53,17 @@ class JournalSyncRepository implements SyncRepository {
       );
     }
 
-    for (final purged in _storage.getSyncPurged().entries) {
-      if (since != null && purged.value.isBefore(since)) continue;
+    for (final MapEntry(key: id, value: mark) in _storage.getSyncPurged().entries) {
+      // Filtered by when it was recorded, but competing with its stamp —
+      // see PurgeMark.
+      if (since != null && mark.recorded.isBefore(since)) continue;
       items.add(
         SyncItem(
-          itemId: purged.key,
+          itemId: id,
           moduleId: _moduleId,
           deviceId: _deviceId,
-          updatedAt: purged.value,
-          deletedAt: purged.value,
+          updatedAt: mark.stamp,
+          deletedAt: mark.stamp,
           payload: const {},
         ),
       );
@@ -107,7 +109,7 @@ class JournalSyncRepository implements SyncRepository {
     // Everything purged before this watermark has been pushed — forget it.
     // Entries sharing its exact millisecond go once more next round.
     final purged = _storage.getSyncPurged()
-      ..removeWhere((_, at) => at.isBefore(time));
+      ..removeWhere((_, mark) => mark.recorded.isBefore(time));
     await _storage.setSyncPurged(purged);
   }
 
