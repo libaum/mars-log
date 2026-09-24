@@ -19,11 +19,20 @@ class LocalStorageService {
   static const _keyDailyExportEnabled = 'daily_export_enabled';
   static const _keyDailyExportFolderUri = 'daily_export_folder_uri';
   static const _keyDailyExportFolderName = 'daily_export_folder_name';
-  static const _keySyncPurged = 'sync_purged';
+  // Sync keys come in two kinds, and the difference matters on the desktop
+  // hub, where every module shares one prefs file with mars_thoughts:
+  //
+  // - The hub URL belongs to the *device*: same name as mars_thoughts, so
+  //   the hub pairs once and every module follows.
+  // - Watermarks and the purge trace belong to the *module*: prefixed, or
+  //   the modules would advance each other's watermarks and push each
+  //   other's tombstones. (On the phone the apps have separate prefs; the
+  //   prefix just costs nothing there.)
   static const _keySyncServerUrl = 'sync_server_url';
-  static const _keySyncLastSyncedAt = 'sync_last_synced_at';
-  static const _keySyncLastSeenSeq = 'sync_last_seen_seq';
-  static const _keySyncLastSeenHubId = 'sync_last_seen_hub_id';
+  static const _keySyncPurged = 'log_sync_purged';
+  static const _keySyncLastSyncedAt = 'log_sync_last_synced_at';
+  static const _keySyncLastSeenSeq = 'log_sync_last_seen_seq';
+  static const _keySyncLastSeenHubId = 'log_sync_last_seen_hub_id';
 
   final SharedPreferences _prefs;
 
