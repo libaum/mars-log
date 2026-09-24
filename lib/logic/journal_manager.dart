@@ -56,7 +56,8 @@ class JournalManager {
   //
   // Every path here waits seconds on the network (the model) or the GPS, and
   // a sync round may run meanwhile and replace the entry with a version
-  // edited on the laptop. So no path holds a JournalEntry across an await:
+  // edited on the laptop — one edited *after* the analysis started; an older
+  // one loses to the "analyzing" stamp by last-write-wins. So no path holds a JournalEntry across an await:
   // it keeps the id, re-reads the entry afterwards, and writes only what it
   // owns — see [_applyResult]. Writing the held object back would undo the
   // laptop's edit with a fresh stamp, and that stale version would then win
@@ -107,7 +108,10 @@ class JournalManager {
     // Purged (here or elsewhere) while recording: the recording must not be
     // lost, so it becomes an entry of its own.
     if (start == null) return createFromAudio(rec);
+    // Trashed elsewhere while recording: a new recording is newer intent than
+    // the trashing, so the entry comes back (as typing does in the hub).
     start
+      ..deletedAt = null
       ..status = EntryStatus.analyzing
       ..errorMessage = null;
     await _repo.upsert(start);
@@ -127,6 +131,7 @@ class JournalManager {
         }
         // Appended to the transcript as stored *now*: a correction made on
         // the laptop while this snippet was transcribed stays.
+        live.deletedAt = null; // same rule if it was trashed meanwhile
         live.transcript = [live.transcript, partial.transcript]
             .where((t) => t != null && t.isNotEmpty)
             .join('\n\n');

@@ -196,11 +196,15 @@ class SyncService {
     }
 
     await _keys.writeEncryptionKey(trimmed);
+    // A re-pair may also land while the key is written or the engine is
+    // rebuilt; the check then was against a hub this service no longer uses.
+    verified = verified && generation == _generation;
     _pairingChanged();
+    final mine = _generation;
     await _rebuildEngine();
     // Set after the rebuild, which is itself a pairing change: the check
     // above was for exactly this key against exactly this hub.
-    if (verified) _keyVerified = true;
+    if (verified && mine == _generation) _keyVerified = true;
   }
 
   Future<String?> exportEncryptionKey() => _keys.readEncryptionKey();

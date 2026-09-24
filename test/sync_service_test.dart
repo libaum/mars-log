@@ -25,6 +25,17 @@ class _MemoryKeys implements SyncKeyStore {
   Future<void> writeEncryptionKey(String base64Key) async => _values['key'] = base64Key;
 }
 
+/// Holds the encryption-key write until [gate] opens.
+class _GatedKeys extends _MemoryKeys {
+  Completer<void>? gate;
+  @override
+  Future<void> writeEncryptionKey(String base64Key) async {
+    final g = gate;
+    if (g != null) await g.future;
+    return super.writeEncryptionKey(base64Key);
+  }
+}
+
 /// Holds the first key-check pull until [gate] opens — the window in which
 /// the pairing can change under a running check.
 class _GatedTransport extends FakeTransport {
@@ -122,6 +133,36 @@ void main() {
       await sync.syncNow();
       expect(sync.statusNotifier.value.phase, SyncPhase.error);
       expect(hubB.row('x'), isNull);
+    });
+  });
+
+  test('a key import that outlives a re-pair does not count for the new hub', () async {
+    // Review round 5, L1: the check passed against A, the re-pair to B landed
+    // while the key was being written, and B was then marked verified.
+    await phone.run((journal, storage) async {
+      final keys = _GatedKeys();
+      final sync = SyncService(
+        storage: storage,
+        journal: journal,
+        keys: keys,
+        transport: (uri, token) => FakeTransport(hubFor(uri), 'phone'),
+      );
+      await storage.setSyncServerUrl('https://a');
+      await keys.writeDeviceToken('t');
+      await keys.writeDeviceId('phone');
+      await sync.init();
+      await journal.upsert(entry('x'));
+
+      keys.gate = Completer<void>();
+      final import = sync.importEncryptionKey(keyA);
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      await storage.setSyncServerUrl('https://b');
+      await sync.reload();
+      keys.gate!.complete();
+      await import;
+
+      await sync.syncNow();
+      expect(hubB.row('x'), isNull, reason: 'pushed to hub B with a key B never saw');
     });
   });
 }

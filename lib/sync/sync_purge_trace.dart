@@ -21,4 +21,7 @@ class SyncPurgeTrace implements PurgeTrace {
     // prefs cache updates synchronously, so the next round sees it.
     _storage.setSyncPurged(purged);
   }
+
+  @override
+  bool get defersAutoPurge => _storage.getSyncServerUrl() != null;
 }

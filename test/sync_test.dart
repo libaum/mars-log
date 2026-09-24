@@ -515,4 +515,111 @@ void main() {
       });
     });
   });
+
+  group('review round 5', () {
+    /// A paired device: the 30-day purge then waits for a completed round.
+    void pair(Device d) => d.prefs['flutter.sync_server_url'] = 'https://hub';
+
+    Future<JournalEntry> trashedLongAgo(List<Device> devices, {List<String> audio = const []}) async {
+      final trashedAt = DateTime.now().subtract(const Duration(days: 31));
+      final e = entry('a', deletedAt: trashedAt, audio: audio)..changedAt = trashedAt;
+      for (final d in devices) {
+        await d.dir.create(recursive: true);
+        await File('${d.dir.path}/entries.json').writeAsString(jsonEncode([e.toJson()]));
+      }
+      return e;
+    }
+
+    test('M1: a restore on the laptop brings the entry back with its recording', () async {
+      pair(phone);
+      final e = await trashedLongAgo([phone, laptop], audio: ['a.wav']);
+      await phone.audio('a.wav').create(recursive: true);
+      final restored = JournalEntry.fromJson(e.toJson())
+        ..deletedAt = null
+        ..changedAt = DateTime.now().subtract(const Duration(minutes: 5));
+      await File('${laptop.dir.path}/entries.json')
+          .writeAsString(jsonEncode([restored.toJson()]));
+      await laptop.sync(hub, key);
+
+      await phone.sync(hub, key); // app start: load, then the first round
+      await phone.run((journal, _) async {
+        expect(journal.byId('a')?.deletedAt, isNull);
+        expect(journal.byId('a')!.audioFileNames, ['a.wav']);
+      });
+      expect(phone.audio('a.wav').existsSync(), isTrue,
+          reason: 'the only recording was deleted before the restore arrived');
+    });
+
+    test('a paired device purges expired entries after a round, and the tombstone '
+        'reaches the hub although its stamp lies behind the watermark', () async {
+      pair(phone);
+      final e = await trashedLongAgo([phone], audio: ['a.wav']);
+      await phone.audio('a.wav').create(recursive: true);
+
+      await phone.run((journal, _) async {
+        expect(journal.byId('a'), isNotNull, reason: 'purged at load while paired');
+      });
+      await phone.sync(hub, key); // pushes the trashed entry, then purges
+      expect(phone.audio('a.wav').existsSync(), isFalse);
+      await phone.run((journal, _) async => expect(journal.byId('a'), isNull));
+
+      await tick();
+      await phone.sync(hub, key); // pushes the tombstone
+      final row = hub.row('a')!;
+      expect(row.deletedAt, isNotNull);
+      expect(row.updatedAtMs, e.changedAt.millisecondsSinceEpoch + 1);
+    });
+
+    test('a device without autoPurge (the hub) keeps expired entries for the phone to purge',
+        () async {
+      await trashedLongAgo([laptop]); // unpaired: would purge at load
+      final journal = await JournalRepository.getInstance(
+        directory: laptop.dir,
+        autoPurge: false,
+      );
+      await journal.purgeExpired();
+      expect(journal.byId('a'), isNotNull);
+    });
+
+    test('an unpaired device still purges at load', () async {
+      await trashedLongAgo([phone]);
+      await phone.run((journal, _) async => expect(journal.byId('a'), isNull));
+    });
+
+    test('a read-only instance changes nothing on disk', () async {
+      await trashedLongAgo([phone]);
+      await phone.audio('recording-now.m4a').create(recursive: true);
+      final before = await File('${phone.dir.path}/entries.json').readAsString();
+
+      final ro = await JournalRepository.getInstance(directory: phone.dir, readOnly: true);
+      expect(ro.allEntries.map((e) => e.id), ['a']);
+      expect(await File('${phone.dir.path}/entries.json').readAsString(), before);
+      expect(phone.audio('recording-now.m4a').existsSync(), isTrue,
+          reason: 'swept a recording the app is still writing');
+    });
+
+    test('a corrupt index does not take the audio with it', () async {
+      await phone.dir.create(recursive: true);
+      await File('${phone.dir.path}/entries.json').writeAsString('[{"id": "a", tru');
+      await phone.audio('a.wav').create(recursive: true);
+      await phone.run((journal, _) async => expect(journal.allEntries, isEmpty));
+      expect(phone.audio('a.wav').existsSync(), isTrue);
+    });
+
+    test('overlapping writes leave the newest state on disk', () async {
+      await phone.run((journal, _) async {
+        await journal.upsert(entry('a'));
+        await Future.wait([
+          journal.edit(journal.byId('a')!, place: 'Wien'),
+          journal.upsert(entry('b')),
+          journal.edit(journal.byId('a')!, tags: ['x']),
+        ]);
+      });
+      await phone.run((journal, _) async {
+        expect(journal.byId('a')!.place, 'Wien');
+        expect(journal.byId('a')!.tags, ['x']);
+        expect(journal.byId('b'), isNotNull);
+      });
+    });
+  });
 }

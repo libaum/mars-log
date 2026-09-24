@@ -12,6 +12,12 @@ abstract class PurgeTrace {
   /// [stamps]: id → the time the tombstone competes with in last-write-wins.
   /// Not necessarily now — see [JournalRepository._purgeExpired].
   void recordPurged(Map<String, DateTime> stamps);
+
+  /// True while the device is paired. The 30-day purge then waits for
+  /// [JournalRepository.purgeExpired] after a completed sync round instead of
+  /// running at load: a restore made on another device must arrive before
+  /// this device deletes the entry's audio, which no backup holds.
+  bool get defersAutoPurge;
 }
 
 /// Owns the on-disk journal: `entries.json` (the index) and the `audio/` folder.
@@ -64,15 +70,32 @@ class JournalRepository {
   /// would bring the entry back with a fresh stamp, beating the purge.
   JournalEntry? _live(JournalEntry entry) => byId(entry.id);
 
-  JournalRepository._(this._purgeTrace);
+  JournalRepository._(this._purgeTrace, this._readOnly, this._autoPurge);
+
+  /// Whether this device runs the 30-day purge at all. Only the device that
+  /// holds the recordings does (the phone); the desktop hub waits for its
+  /// tombstones. That keeps the hub's trash as the place to undo a lost
+  /// entry after a hub restore — see ARCHITECTURE.md §7, recovery step 6.
+  final bool _autoPurge;
+
+  /// A snapshot for reading only (the background export), never written.
+  final bool _readOnly;
 
   /// [directory] defaults to the app documents dir — private on Android, but
   /// `~/Documents` on Linux, so the desktop hub passes its own.
+  ///
+  /// [readOnly]: for a second instance next to the app's own — the daily
+  /// export in its background isolate. Loading then changes nothing on disk:
+  /// no 30-day purge (it would have no purge trace and could race the app's
+  /// own writes) and no orphan sweep (it would delete a recording the app is
+  /// writing right now, which no entry points to yet).
   static Future<JournalRepository> getInstance({
     PurgeTrace? purgeTrace,
     Directory? directory,
+    bool readOnly = false,
+    bool autoPurge = true,
   }) async {
-    final repo = JournalRepository._(purgeTrace);
+    final repo = JournalRepository._(purgeTrace, readOnly, autoPurge);
     await repo._load(directory);
     return repo;
   }
@@ -82,8 +105,24 @@ class JournalRepository {
     await _docsDir.create(recursive: true);
     await Directory(audioDirPath).create(recursive: true);
 
+    if (_readOnly) {
+      await _readIndex();
+      return;
+    }
     final file = File(_indexPath);
-    if (!await file.exists()) return;
+    if (await file.exists() && !await _readIndex()) {
+      // Corrupt index → start empty rather than crash. The audio must
+      // survive that: with no entries, every file would look orphaned.
+      return;
+    }
+    if (!(_purgeTrace?.defersAutoPurge ?? false)) await purgeExpired();
+    await _purgeOrphanedAudio();
+  }
+
+  /// False if the index exists but can't be read.
+  Future<bool> _readIndex() async {
+    final file = File(_indexPath);
+    if (!await file.exists()) return true;
     try {
       final list = jsonDecode(await file.readAsString()) as List<dynamic>;
       _entries
@@ -91,11 +130,11 @@ class JournalRepository {
         ..addAll(list.map((e) =>
             JournalEntry.fromJson((e as Map).cast<String, dynamic>())));
       _sort();
-      await _purgeExpired();
+      return true;
     } catch (_) {
-      // Corrupt index → start empty rather than crash. Audio files survive.
+      _entries.clear();
+      return false;
     }
-    await _purgeOrphanedAudio();
   }
 
   /// Deletes audio files that no entry points to — e.g. a recording whose app
@@ -130,10 +169,23 @@ class JournalRepository {
         return byDay != 0 ? byDay : b.createdAt.compareTo(a.createdAt);
       });
 
-  Future<void> _persist() async {
-    final json = jsonEncode(_entries.map((e) => e.toJson()).toList());
-    await File(_indexPath).writeAsString(json);
-    revision.value++;
+  /// Writes run one after another, each taking the list as it is *when it
+  /// runs* — so the last write always holds the newest state, even when a
+  /// sync apply and an analysis persist at the same time. Each goes to a
+  /// temp file first and is renamed over the index: a crash mid-write leaves
+  /// the previous index, never half of one.
+  Future<void> _writes = Future.value();
+
+  Future<void> _persist() {
+    assert(!_readOnly, 'a read-only JournalRepository must not write');
+    final done = _writes.then((_) async {
+      final json = jsonEncode(_entries.map((e) => e.toJson()).toList());
+      final tmp = File('$_indexPath.tmp');
+      await tmp.writeAsString(json, flush: true);
+      await tmp.rename(_indexPath);
+    });
+    _writes = done.catchError((_) {});
+    return done.then((_) => revision.value++);
   }
 
   /// Stores [entry] as the new truth for its id. It must be the stored
@@ -202,6 +254,12 @@ class JournalRepository {
   }
 
   /// Purge trashed entries older than [trashRetention]. Called on load.
+  /// Runs the 30-day purge. At load on an unpaired device; on a paired one
+  /// after each completed sync round (see [PurgeTrace.defersAutoPurge]).
+  Future<void> purgeExpired() async {
+    if (_autoPurge) await _purgeExpired();
+  }
+
   Future<void> _purgeExpired() async {
     final cutoff = DateTime.now().subtract(trashRetention);
     bool expired(JournalEntry e) =>
@@ -209,9 +267,9 @@ class JournalRepository {
     final gone = _entries.where(expired).toList();
     if (gone.isEmpty) return;
     // Nobody pressed anything, so this tombstone must not compete as "now":
-    // a restore made on another device on day 29 — which this device hasn't
-    // pulled yet, because loading runs before the first sync — would lose to
-    // it. It competes as one millisecond after the entry's last known
+    // a restore made on another device on day 29 that this device hasn't
+    // pulled yet would lose to it (a paired device runs this only after a
+    // pull, but a restore may still land on the hub a second later). It competes as one millisecond after the entry's last known
     // change: newer than the trashed version (so it propagates), older than
     // any later restore or edit elsewhere (so those win). Every device
     // computes the same stamp, so the duplicate tombstones agree.

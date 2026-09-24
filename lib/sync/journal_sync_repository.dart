@@ -111,6 +111,11 @@ class JournalSyncRepository implements SyncRepository {
     final purged = _storage.getSyncPurged()
       ..removeWhere((_, mark) => mark.recorded.isBefore(time));
     await _storage.setSyncPurged(purged);
+    // The round is complete: this device now holds everything the hub had,
+    // including a restore made elsewhere on day 29. Only now may the 30-day
+    // purge delete audio. Its tombstones are recorded after [time], so they
+    // survive the pruning above and go out with the next round.
+    await _journal.purgeExpired();
   }
 
   @override

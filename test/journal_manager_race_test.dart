@@ -213,6 +213,36 @@ void main() {
     });
   });
 
+  test('a recording appended to an entry trashed meanwhile brings it back', () async {
+    // Review round 5, L2: the new recording ended up in the trash.
+    await phone.run((journal, _) => journal.upsert(entry('a')));
+    await phone.sync(hub, key);
+    await laptop.sync(hub, key);
+
+    await phone.run((journal, storage) async {
+      final engine = _Engine((text) => _result(transcript: text ?? 'neu'));
+      final manager = _manager(journal, storage, engine);
+      await phone.audio('b.wav').create(recursive: true);
+      final append = manager.appendRecording(
+        journal.byId('a')!,
+        RecordingResult(id: 'b', fileName: 'b.wav', createdAt: DateTime.now()),
+      );
+      await _settle();
+
+      await tick();
+      await laptop.run((lj, _) => lj.moveToTrash(lj.byId('a')!));
+      await laptop.sync(hub, key);
+      await syncLive('phone', journal, storage, hub, key);
+
+      engine.gate.complete();
+      await append;
+
+      final e = journal.byId('a')!;
+      expect(e.deletedAt, isNull);
+      expect(e.audioFileNames, contains('b.wav'));
+    });
+  });
+
   test('edits through an entry held across a sync land on the stored one', () async {
     // The phone's detail screen holds its entry across date/place dialogs.
     await phone.run((journal, _) async {

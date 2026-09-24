@@ -28,7 +28,8 @@ Future<void> runDailyExport() async {
     final folderUri = storage.getDailyExportFolderUri();
     if (folderUri == null) return;
 
-    final repo = await JournalRepository.getInstance();
+    // Read-only: the app may be running (and recording) in the other isolate.
+    final repo = await JournalRepository.getInstance(readOnly: true);
     final bytes = await ExportService(repo).buildZipBytes();
 
     final stamp = DateTime.now().toIso8601String().split('T').first;
