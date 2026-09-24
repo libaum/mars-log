@@ -15,6 +15,7 @@ import 'package:mars_log/theme/theme_constants.dart';
 
 /// Full view of one entry: audio, transcript, summary, mood, tags.
 /// Reacts live to re-analysis via the journal's entriesNotifier.
+/// Swipe left/right to page to the next/previous day's entry.
 class EntryDetailScreen extends StatefulWidget {
   final String entryId;
   const EntryDetailScreen({super.key, required this.entryId});
@@ -29,9 +30,12 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
   final _cloudEngine = getIt<CloudAnalysisEngine>();
   final _onDeviceEngine = getIt<OnDeviceAnalysisEngine>();
   final _player = AudioPlayer();
+  late String _currentId = widget.entryId;
+  PageController? _pageController;
+  String? _playingEntryId;
   int? _playingIndex;
   bool _leaving = false;
-  AnalysisEngine? _reanalyzingWith;
+  final _reanalyzingWith = <String, AnalysisEngine>{};
 
   @override
   void initState() {
@@ -43,19 +47,42 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
 
   @override
   void dispose() {
+    _pageController?.dispose();
     _player.dispose();
     super.dispose();
   }
 
   Future<void> _togglePlay(JournalEntry entry, int index) async {
-    if (_playingIndex == index) {
+    if (_playingEntryId == entry.id && _playingIndex == index) {
       await _player.pause();
       setState(() => _playingIndex = null);
     } else {
       await _player
           .play(DeviceFileSource(_repo.audioPath(entry.audioFileNames[index])));
-      setState(() => _playingIndex = index);
+      setState(() {
+        _playingEntryId = entry.id;
+        _playingIndex = index;
+      });
     }
+  }
+
+  void _onPageChanged(List<JournalEntry> pages, int index) {
+    if (_playingIndex != null) _player.stop();
+    setState(() {
+      _currentId = pages[index].id;
+      _playingIndex = null;
+    });
+  }
+
+  /// Keeps the pager on the current entry when the list around it changes
+  /// (backdating re-sorts it, another entry gets added or deleted).
+  void _keepPage(int index) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final controller = _pageController;
+      if (!mounted || controller == null || !controller.hasClients) return;
+      final page = controller.page;
+      if (page != null && page.round() != index) controller.jumpToPage(index);
+    });
   }
 
   Future<void> _pickDay(JournalEntry entry) async {
@@ -132,14 +159,11 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
           child: ValueListenableBuilder<List<JournalEntry>>(
             valueListenable: _journal.entriesNotifier,
             builder: (context, entries, _) {
-              JournalEntry? entry;
-              for (final e in entries) {
-                if (e.id == widget.entryId) {
-                  entry = e;
-                  break;
-                }
-              }
-              if (entry == null) {
+              // Oldest on the left, newest on the right — swiping left goes
+              // forward in time.
+              final pages = entries.reversed.toList();
+              final index = pages.indexWhere((e) => e.id == _currentId);
+              if (index < 0) {
                 // Deleted (here or elsewhere) — leave the screen exactly once.
                 if (!_leaving) {
                   _leaving = true;
@@ -149,7 +173,25 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
                 }
                 return const SizedBox.shrink();
               }
-              return _content(entry);
+              if (_pageController == null) {
+                _pageController = PageController(initialPage: index);
+              } else {
+                _keepPage(index);
+              }
+              return PageView.builder(
+                controller: _pageController,
+                itemCount: pages.length,
+                onPageChanged: (i) => _onPageChanged(pages, i),
+                findChildIndexCallback: (key) {
+                  final i = pages.indexWhere(
+                      (e) => e.id == (key as ValueKey<String>).value);
+                  return i < 0 ? null : i;
+                },
+                itemBuilder: (context, i) => KeyedSubtree(
+                  key: ValueKey(pages[i].id),
+                  child: _content(pages[i]),
+                ),
+              );
             },
           ),
         ),
@@ -257,7 +299,7 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
                             Border.all(color: primary.withValues(alpha: 0.4)),
                       ),
                       child: Icon(
-                          _playingIndex == i
+                          _playingEntryId == entry.id && _playingIndex == i
                               ? Icons.pause
                               : Icons.play_arrow,
                           color: primary),
@@ -366,7 +408,7 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
     // by side either way so the same entry can be compared cloud vs.
     // on-device.
     void reanalyzeWith(AnalysisEngine engine) {
-      setState(() => _reanalyzingWith = engine);
+      setState(() => _reanalyzingWith[entry.id] = engine);
       _journal.reanalyzeWith(entry, engine);
     }
 
@@ -374,7 +416,7 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
       TextButton(
         onPressed: analyzing ? null : () => reanalyzeWith(_cloudEngine),
         child: Text(
-            analyzing && _reanalyzingWith == _cloudEngine
+            analyzing && _reanalyzingWith[entry.id] == _cloudEngine
                 ? 'Analysiert …'
                 : 'Neu analysieren (Cloud)',
             style: TEXT_STYLE_SETTING),
@@ -382,7 +424,7 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
       TextButton(
         onPressed: analyzing ? null : () => reanalyzeWith(_onDeviceEngine),
         child: Text(
-            analyzing && _reanalyzingWith == _onDeviceEngine
+            analyzing && _reanalyzingWith[entry.id] == _onDeviceEngine
                 ? 'Analysiert …'
                 : 'Neu analysieren (Gerät)',
             style: TEXT_STYLE_SETTING),
