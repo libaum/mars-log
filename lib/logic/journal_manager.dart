@@ -37,6 +37,9 @@ class JournalManager {
   JournalManager() {
     entriesNotifier = ValueNotifier(_repo.entries);
     trashNotifier = ValueNotifier(_repo.deletedEntries);
+    // A sync round writes straight to the repository, so the screens would
+    // otherwise keep showing the pre-sync list until the next local edit.
+    _repo.revision.addListener(_refresh);
   }
 
   void _refresh() {
@@ -256,16 +259,13 @@ class JournalManager {
 
   /// Moves an entry to a different day (e.g. backdating). Re-sorts the timeline.
   Future<void> setDay(JournalEntry entry, DateTime day) async {
-    entry.day = DateTime(day.year, day.month, day.day);
-    await _repo.upsert(entry);
+    await _repo.setDay(entry, day);
     _refresh();
   }
 
   /// Sets or clears the entry's location label (also works on old entries).
   Future<void> setPlace(JournalEntry entry, String? place) async {
-    final trimmed = place?.trim();
-    entry.place = (trimmed == null || trimmed.isEmpty) ? null : trimmed;
-    await _repo.upsert(entry);
+    await _repo.setPlace(entry, place);
     _refresh();
   }
 }

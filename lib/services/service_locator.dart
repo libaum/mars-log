@@ -18,6 +18,8 @@ import 'package:mars_log/logic/lock_manager.dart';
 import 'package:mars_log/logic/notification_manager.dart';
 import 'package:mars_log/logic/recording_manager.dart';
 import 'package:mars_log/logic/settings_manager.dart';
+import 'package:mars_log/sync/sync_purge_trace.dart';
+import 'package:mars_log/sync/sync_service.dart';
 import 'package:mars_log/theme/theme_manager.dart';
 
 final getIt = GetIt.instance;
@@ -29,9 +31,15 @@ Future<void> setupServiceLocator() async {
   );
   getIt.registerSingleton<SecureStorageService>(SecureStorageService());
 
-  getIt.registerSingleton<JournalRepository>(
-    await JournalRepository.getInstance(),
+  final journal = await JournalRepository.getInstance(
+    purgeTrace: SyncPurgeTrace(getIt<LocalStorageService>()),
   );
+  getIt.registerSingleton<JournalRepository>(journal);
+
+  // Never throws; an unpaired or broken pairing just reports it in status.
+  final sync = SyncService(storage: getIt<LocalStorageService>(), journal: journal);
+  await sync.init();
+  getIt.registerSingleton<SyncService>(sync);
   getIt.registerSingleton<LocationHistoryRepository>(
     await LocationHistoryRepository.getInstance(),
   );

@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// Thin wrapper around SharedPreferences for non-sensitive app settings.
@@ -17,6 +19,11 @@ class LocalStorageService {
   static const _keyDailyExportEnabled = 'daily_export_enabled';
   static const _keyDailyExportFolderUri = 'daily_export_folder_uri';
   static const _keyDailyExportFolderName = 'daily_export_folder_name';
+  static const _keySyncPurged = 'sync_purged';
+  static const _keySyncServerUrl = 'sync_server_url';
+  static const _keySyncLastSyncedAt = 'sync_last_synced_at';
+  static const _keySyncLastSeenSeq = 'sync_last_seen_seq';
+  static const _keySyncLastSeenHubId = 'sync_last_seen_hub_id';
 
   final SharedPreferences _prefs;
 
@@ -104,4 +111,73 @@ class LocalStorageService {
   Future<void> setDailyExportFolderName(String? v) => v == null
       ? _prefs.remove(_keyDailyExportFolderName)
       : _prefs.setString(_keyDailyExportFolderName, v);
+
+  // ── Sync ─────────────────────────────────────────────────────────────────
+
+  /// Ids of entries permanently removed, with the time it happened. Once an
+  /// entry is purged it is gone from the index, so this is the only trace the
+  /// sync layer has left to tell other devices to drop their copy. Pruned
+  /// again after a successful sync.
+  Map<String, DateTime> getSyncPurged() {
+    final json = _prefs.getString(_keySyncPurged);
+    if (json == null) return {};
+    try {
+      final map = jsonDecode(json) as Map<String, dynamic>;
+      return map.map(
+        (id, ms) => MapEntry(id, DateTime.fromMillisecondsSinceEpoch(ms as int)),
+      );
+    } catch (_) {
+      return {};
+    }
+  }
+
+  Future<void> setSyncPurged(Map<String, DateTime> purged) async {
+    final json = jsonEncode(
+      purged.map((id, at) => MapEntry(id, at.millisecondsSinceEpoch)),
+    );
+    await _prefs.setString(_keySyncPurged, json);
+  }
+
+  String? getSyncServerUrl() => _prefs.getString(_keySyncServerUrl);
+
+  Future<void> setSyncServerUrl(String? url) async {
+    if (url == null) {
+      await _prefs.remove(_keySyncServerUrl);
+    } else {
+      await _prefs.setString(_keySyncServerUrl, url);
+    }
+  }
+
+  DateTime? getSyncLastSyncedAt() {
+    final ms = _prefs.getInt(_keySyncLastSyncedAt);
+    return ms == null ? null : DateTime.fromMillisecondsSinceEpoch(ms);
+  }
+
+  Future<void> setSyncLastSyncedAt(DateTime? at) async {
+    if (at == null) {
+      await _prefs.remove(_keySyncLastSyncedAt);
+    } else {
+      await _prefs.setInt(_keySyncLastSyncedAt, at.millisecondsSinceEpoch);
+    }
+  }
+
+  /// Hub sequence number up to which this device has pulled, and which hub
+  /// instance that number belongs to. Independent of [getSyncLastSyncedAt],
+  /// which is the *push* watermark on the local clock.
+  int? getSyncLastSeenSeq() => _prefs.getInt(_keySyncLastSeenSeq);
+
+  String? getSyncLastSeenHubId() => _prefs.getString(_keySyncLastSeenHubId);
+
+  Future<void> setSyncPullWatermark({
+    required int? seq,
+    required String? hubId,
+  }) async {
+    if (seq == null || hubId == null) {
+      await _prefs.remove(_keySyncLastSeenSeq);
+      await _prefs.remove(_keySyncLastSeenHubId);
+    } else {
+      await _prefs.setInt(_keySyncLastSeenSeq, seq);
+      await _prefs.setString(_keySyncLastSeenHubId, hubId);
+    }
+  }
 }

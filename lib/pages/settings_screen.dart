@@ -11,9 +11,11 @@ import 'package:mars_log/logic/notification_manager.dart';
 import 'package:mars_log/logic/settings_manager.dart';
 import 'package:mars_log/logic/lock_manager.dart';
 import 'package:mars_log/pages/about_screen.dart';
+import 'package:mars_log/pages/sync_screen.dart';
 import 'package:mars_log/pages/trash_screen.dart';
 import 'package:mars_log/pages/widgets/double_tap_theme_toggle.dart';
 import 'package:mars_log/services/service_locator.dart';
+import 'package:mars_log/sync/sync_service.dart';
 import 'package:mars_log/theme/theme_constants.dart';
 import 'package:mars_log/theme/theme_manager.dart';
 
@@ -380,6 +382,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ),
                       ),
                     ],
+                  ),
+                ),
+                ValueListenableBuilder<SyncStatus>(
+                  valueListenable: getIt<SyncService>().statusNotifier,
+                  builder: (context, status, _) => _navRow(
+                    'Sync',
+                    trailing: switch (status.phase) {
+                      SyncPhase.unpaired => 'Aus',
+                      SyncPhase.error => 'Fehler',
+                      _ => null,
+                    },
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const SyncScreen()),
+                    ),
                   ),
                 ),
                 ValueListenableBuilder<List<JournalEntry>>(

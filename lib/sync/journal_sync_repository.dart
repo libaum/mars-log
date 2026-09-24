@@ -1,0 +1,125 @@
+import 'package:mars_log/data/journal_repository.dart';
+import 'package:mars_log/data/local_storage_service.dart';
+import 'package:mars_log/domain/journal_entry.dart';
+import 'package:mars_sync/mars_sync.dart';
+
+/// Maps journal entries onto mars_sync's generic [SyncItem]s.
+///
+/// The whole entry rides along as the payload, ordered by
+/// [JournalEntry.changedAt] — text, analysis, day, place, tags, trash state.
+/// Audio does not: [JournalEntry.audioFileNames] travels as metadata only,
+/// the files stay on the device that recorded them (ARCHITECTURE.md §7).
+///
+/// Moving to the trash is an ordinary edit and syncs like one. A *purge* —
+/// manual, or the 30-day trash retention — is the only thing that becomes a
+/// tombstone; [SyncPurgeTrace] records it, this class pushes it.
+class JournalSyncRepository implements SyncRepository {
+  static const _moduleId = 'mars_log';
+
+  final JournalRepository _journal;
+  final LocalStorageService _storage;
+  final String _deviceId;
+
+  JournalSyncRepository({
+    required JournalRepository journal,
+    required LocalStorageService storage,
+    required String deviceId,
+  })  : _journal = journal,
+        _storage = storage,
+        _deviceId = deviceId;
+
+  @override
+  String get moduleId => _moduleId;
+
+  @override
+  Future<List<SyncItem>> localChangesSince(DateTime? since) async {
+    final items = <SyncItem>[];
+
+    for (final entry in _journal.allEntries) {
+      // An entry still being analyzed is half-made: its transcript is empty
+      // and its status will flip within seconds. Pushing it would briefly
+      // show a spinner-forever entry on the laptop. It goes out once ready
+      // or failed — that write stamps it anyway.
+      if (entry.status == EntryStatus.analyzing) continue;
+      if (since != null && entry.changedAt.isBefore(since)) continue;
+      items.add(
+        SyncItem(
+          itemId: entry.id,
+          moduleId: _moduleId,
+          deviceId: _deviceId,
+          updatedAt: entry.changedAt,
+          payload: entry.toJson(),
+        ),
+      );
+    }
+
+    for (final purged in _storage.getSyncPurged().entries) {
+      if (since != null && purged.value.isBefore(since)) continue;
+      items.add(
+        SyncItem(
+          itemId: purged.key,
+          moduleId: _moduleId,
+          deviceId: _deviceId,
+          updatedAt: purged.value,
+          deletedAt: purged.value,
+          payload: const {},
+        ),
+      );
+    }
+
+    return items;
+  }
+
+  @override
+  Future<void> applyRemoteItems(List<SyncItem> items) async {
+    final upserts = <JournalEntry>[];
+    final removed = <String, DateTime>{};
+    for (final item in items) {
+      if (item.isDeleted) {
+        removed[item.itemId] = item.updatedAt;
+        continue;
+      }
+      // The envelope's id is authenticated (AAD); the payload's id must agree
+      // or the payload is not what the hub claims it is.
+      if (item.payload['id'] != item.itemId) continue;
+      final JournalEntry entry;
+      try {
+        entry = JournalEntry.fromJson(item.payload);
+      } on Object {
+        // A payload this build can't read (a newer app version on the other
+        // device). Skipping beats failing the round for every other entry —
+        // but the pull watermark moves past it, so this device only sees it
+        // again after a re-pair (pull from 0) or its next edit elsewhere.
+        continue;
+      }
+      entry.changedAt = item.updatedAt;
+      upserts.add(entry);
+    }
+    await _journal.applySynced(upserts, removed);
+  }
+
+  @override
+  Future<DateTime?> lastSyncedAt() async => _storage.getSyncLastSyncedAt();
+
+  @override
+  Future<void> setLastSyncedAt(DateTime time) async {
+    await _storage.setSyncLastSyncedAt(time);
+    // Everything purged before this watermark has been pushed — forget it.
+    // Entries sharing its exact millisecond go once more next round.
+    final purged = _storage.getSyncPurged()
+      ..removeWhere((_, at) => at.isBefore(time));
+    await _storage.setSyncPurged(purged);
+  }
+
+  @override
+  Future<PullWatermark?> pullWatermark() async {
+    final seq = _storage.getSyncLastSeenSeq();
+    final hubId = _storage.getSyncLastSeenHubId();
+    if (seq == null || hubId == null) return null;
+    return PullWatermark(hubId: hubId, seq: seq);
+  }
+
+  @override
+  Future<void> setPullWatermark(PullWatermark watermark) =>
+      _storage.setSyncPullWatermark(seq: watermark.seq, hubId: watermark.hubId);
+}

@@ -6,6 +6,7 @@ import 'package:mars_log/logic/lock_manager.dart';
 import 'package:mars_log/pages/lock_screen.dart';
 import 'package:mars_log/pages/main_screen.dart';
 import 'package:mars_log/services/service_locator.dart';
+import 'package:mars_log/sync/sync_service.dart';
 import 'package:mars_log/theme/theme_manager.dart';
 
 void main() async {
@@ -76,6 +77,7 @@ class AppRoot extends StatefulWidget {
 class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
   final _lock = getIt<LockManager>();
   final _journal = getIt<JournalManager>();
+  final _sync = getIt<SyncService>();
 
   @override
   void initState() {
@@ -83,6 +85,9 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     // Pick up anything left half-analysed by a killed or frozen process.
     _journal.resumePending();
+    // A cold launch doesn't replay `resumed` to observers added here, so the
+    // first round is kicked off explicitly.
+    _sync.syncNow();
   }
 
   @override
@@ -95,8 +100,12 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.paused) {
       _lock.lockIfEnabled();
+      // Best-effort on the way out: the OS may freeze the process mid-request,
+      // and the next resume repeats whatever didn't land.
+      _sync.syncNow();
     } else if (state == AppLifecycleState.resumed) {
       _journal.resumePending();
+      _sync.syncNow();
     }
   }
 

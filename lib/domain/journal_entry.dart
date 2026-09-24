@@ -25,6 +25,16 @@ class JournalEntry {
   final DateTime createdAt;
   DateTime day;
 
+  /// When *anything* about this entry last changed — transcript, summary,
+  /// day, place, tags, trash, restore. [createdAt] is fixed and [day] is
+  /// user-chosen, so neither can order edits; this is the clock the sync
+  /// layer resolves last-write-wins with.
+  ///
+  /// Stamped centrally in [JournalRepository], not at each call site, so a
+  /// new mutation cannot forget it. Remote edits keep the stamp they arrive
+  /// with — see `JournalRepository.applySynced`.
+  DateTime changedAt;
+
   /// One or more recordings for this entry, oldest first. Usually just one;
   /// more than one when further recordings were added for the same day via
   /// "Weitere Aufnahme für diesen Tag".
@@ -61,6 +71,7 @@ class JournalEntry {
     required this.createdAt,
     required this.day,
     required this.audioFileNames,
+    DateTime? changedAt,
     this.status = EntryStatus.analyzing,
     this.transcript,
     this.summary,
@@ -76,12 +87,16 @@ class JournalEntry {
     this.latitude,
     this.longitude,
     this.place,
-  }) : tags = tags ?? const [];
+  })  : tags = tags ?? const [],
+        // Entries written before sync existed get their creation time, which
+        // is the oldest stamp they could honestly claim.
+        changedAt = changedAt ?? createdAt;
 
   Map<String, dynamic> toJson() => {
         'id': id,
         'createdAt': createdAt.toIso8601String(),
         'day': day.toIso8601String(),
+        'changedAt': changedAt.toIso8601String(),
         'audioFileNames': audioFileNames,
         'status': status.name,
         'transcript': transcript,
@@ -106,6 +121,9 @@ class JournalEntry {
       id: json['id'] as String,
       createdAt: DateTime.parse(json['createdAt'] as String),
       day: DateTime.parse(json['day'] as String),
+      changedAt: json['changedAt'] == null
+          ? null
+          : DateTime.parse(json['changedAt'] as String),
       // Back-compat: entries written before multi-recording support stored a
       // single 'audioFileName' string instead of the 'audioFileNames' list.
       audioFileNames: (json['audioFileNames'] as List<dynamic>?)
