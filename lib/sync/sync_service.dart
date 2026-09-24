@@ -261,10 +261,14 @@ class SyncService {
   }
 
   Future<void> _rebuildEngine() async {
+    final generation = _generation;
     final url = _storage.getSyncServerUrl();
     final token = await _keys.readDeviceToken();
     final key = await _keys.readEncryptionKey();
     final deviceId = await _keys.readDeviceId();
+    // The pairing changed while the keys were read: a newer rebuild runs (or
+    // ran) for it. Finishing this one would point the engine at the old hub.
+    if (generation != _generation) return;
 
     _client = (url != null && token != null)
         ? _transport(Uri.parse(url), token)

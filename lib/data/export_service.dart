@@ -28,6 +28,9 @@ class ExportService {
     if (await index.exists()) {
       await encoder.addFile(index, 'entries.json');
     }
+    for (final corrupt in await _repository.corruptIndexFiles()) {
+      await encoder.addFile(corrupt, corrupt.uri.pathSegments.last);
+    }
     await encoder.close();
     return zipPath;
   }

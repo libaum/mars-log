@@ -5,10 +5,12 @@ import 'package:mars_log/logic/journal_manager.dart';
 import 'package:mars_log/pages/widgets/confirm_dialog.dart';
 import 'package:mars_log/pages/widgets/double_tap_theme_toggle.dart';
 import 'package:mars_log/services/service_locator.dart';
+import 'package:mars_log/sync/sync_service.dart';
 import 'package:mars_log/theme/theme_constants.dart';
 
 /// The trash: soft-deleted entries. Each can be restored or purged for good.
-/// Entries older than [JournalRepository.trashRetention] are purged on load.
+/// Entries older than [JournalRepository.trashRetention] are purged
+/// automatically — see [JournalRepository.purgeExpired].
 class TrashScreen extends StatefulWidget {
   const TrashScreen({super.key});
 
@@ -35,6 +37,8 @@ class _TrashScreenState extends State<TrashScreen> {
   }
 
   Future<void> _emptyTrash() async {
+    // What the user sees now; a sync round may trash more meanwhile.
+    final shown = _journal.trashNotifier.value.map((e) => e.id).toSet();
     final ok = await showConfirmDialog(
       context,
       title: 'Papierkorb leeren?',
@@ -42,7 +46,7 @@ class _TrashScreenState extends State<TrashScreen> {
           'Das lässt sich nicht rückgängig machen.',
       confirmLabel: 'Leeren',
     );
-    if (ok) await _journal.emptyTrash();
+    if (ok) await _journal.emptyTrash(only: shown);
   }
 
   void _snack(String msg) {
@@ -68,11 +72,20 @@ class _TrashScreenState extends State<TrashScreen> {
                     child: Text('Papierkorb', style: TEXT_STYLE_TITLE),
                   ),
                   const SizedBox(height: 12),
-                  const Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 32),
-                    child: Text(
-                      'Einträge werden nach 30 Tagen automatisch entfernt.',
-                      style: TEXT_STYLE_STATUS,
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 32),
+                    child: ValueListenableBuilder<SyncStatus>(
+                      valueListenable: getIt<SyncService>().statusNotifier,
+                      // Paired, the 30-day purge waits for a completed round
+                      // (PurgeTrace.defersAutoPurge) — none, no purge.
+                      builder: (context, status, _) => Text(
+                        status.phase == SyncPhase.error
+                            ? 'Einträge werden nach 30 Tagen automatisch '
+                                'entfernt – aber erst wieder, wenn der Sync '
+                                'klappt.'
+                            : 'Einträge werden nach 30 Tagen automatisch entfernt.',
+                        style: TEXT_STYLE_STATUS,
+                      ),
                     ),
                   ),
                   const SizedBox(height: 28),

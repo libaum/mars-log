@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:mars_log/data/export_service.dart';
+import 'package:mars_log/data/journal_repository.dart';
 import 'package:mars_log/data/google_timeline_import_service.dart';
 import 'package:mars_log/data/local_storage_service.dart';
 import 'package:mars_log/data/on_device_analysis_service.dart';
@@ -13,6 +14,7 @@ import 'package:mars_log/logic/lock_manager.dart';
 import 'package:mars_log/pages/about_screen.dart';
 import 'package:mars_log/pages/sync_screen.dart';
 import 'package:mars_log/pages/trash_screen.dart';
+import 'package:mars_log/pages/widgets/confirm_dialog.dart';
 import 'package:mars_log/pages/widgets/double_tap_theme_toggle.dart';
 import 'package:mars_log/services/service_locator.dart';
 import 'package:mars_log/sync/sync_service.dart';
@@ -399,6 +401,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                   ),
                 ),
+                ValueListenableBuilder<bool>(
+                  valueListenable: getIt<JournalRepository>().corruptIndex,
+                  builder: (context, corrupt, _) => corrupt
+                      ? _navRow(
+                          'Beschädigter Index',
+                          trailing: '!',
+                          onTap: _discardCorruptIndex,
+                        )
+                      : const SizedBox.shrink(),
+                ),
                 ValueListenableBuilder<List<JournalEntry>>(
                   valueListenable: _journal.trashNotifier,
                   builder: (context, trash, _) => _navRow(
@@ -446,6 +458,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
       ),
     );
+  }
+
+  Future<void> _discardCorruptIndex() async {
+    final ok = await showConfirmDialog(
+      context,
+      title: 'Beschädigter Index',
+      message: 'Das Journal war nicht lesbar und wurde beiseitegelegt. '
+          'Es steckt in jedem Export, und bis du es verwirfst, bleiben alle '
+          'Aufnahmen erhalten. Mit Sync: entkoppeln und neu koppeln holt die '
+          'Einträge vom Hub zurück. Verwerfen löscht beim nächsten Start '
+          'jede Aufnahme ohne Eintrag.',
+      confirmLabel: 'Verwerfen',
+    );
+    if (ok) await getIt<JournalRepository>().discardCorruptIndexes();
   }
 
   Widget _actionRow(String label, VoidCallback onTap) {

@@ -25,9 +25,19 @@ class _MemoryKeys implements SyncKeyStore {
   Future<void> writeEncryptionKey(String base64Key) async => _values['key'] = base64Key;
 }
 
-/// Holds the encryption-key write until [gate] opens.
+/// Holds the encryption-key write until [gate] opens, and the next token
+/// read until [tokenGate] opens.
 class _GatedKeys extends _MemoryKeys {
   Completer<void>? gate;
+  Completer<void>? tokenGate;
+  @override
+  Future<String?> readDeviceToken() async {
+    final g = tokenGate;
+    tokenGate = null;
+    if (g != null) await g.future;
+    return super.readDeviceToken();
+  }
+
   @override
   Future<void> writeEncryptionKey(String base64Key) async {
     final g = gate;
@@ -162,6 +172,40 @@ void main() {
       await import;
 
       await sync.syncNow();
+      expect(hubB.row('x'), isNull, reason: 'pushed to hub B with a key B never saw');
+    });
+  });
+
+  test('a re-pair during the key import\'s engine rebuild wins, unverified',
+      () async {
+    await phone.run((journal, storage) async {
+      final keys = _GatedKeys();
+      final sync = SyncService(
+        storage: storage,
+        journal: journal,
+        keys: keys,
+        transport: (uri, token) => FakeTransport(hubFor(uri), 'phone'),
+      );
+      await storage.setSyncServerUrl('https://a');
+      await keys.writeDeviceToken('t');
+      await keys.writeDeviceId('phone');
+      await sync.init();
+      await journal.upsert(entry('x'));
+
+      // Checked against A and written; the rebuild then stalls on its token
+      // read while the pairing moves to B.
+      keys.tokenGate = Completer<void>();
+      final gate = keys.tokenGate!;
+      final import = sync.importEncryptionKey(keyA);
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      await storage.setSyncServerUrl('https://b');
+      await sync.reload();
+      gate.complete();
+      await import;
+
+      await sync.syncNow();
+      expect(sync.statusNotifier.value.phase, SyncPhase.error,
+          reason: 'the stale rebuild pointed the engine back at hub A');
       expect(hubB.row('x'), isNull, reason: 'pushed to hub B with a key B never saw');
     });
   });

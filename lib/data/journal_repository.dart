@@ -111,12 +111,46 @@ class JournalRepository {
     }
     final file = File(_indexPath);
     if (await file.exists() && !await _readIndex()) {
-      // Corrupt index → start empty rather than crash. The audio must
-      // survive that: with no entries, every file would look orphaned.
-      return;
+      // Corrupt index (or one this build can't read) → start empty rather
+      // than crash, but set the file aside first: the next write would
+      // overwrite the only copy of every transcript.
+      try {
+        await file.rename(
+            '$_indexPath$_corruptSuffix${DateTime.now().millisecondsSinceEpoch}');
+      } on FileSystemException {
+        return; // couldn't set it aside — at least spare the audio this run
+      }
     }
+    corruptIndex.value = (await corruptIndexFiles()).isNotEmpty;
     if (!(_purgeTrace?.defersAutoPurge ?? false)) await purgeExpired();
-    await _purgeOrphanedAudio();
+    // With an index set aside, every recording of its entries looks
+    // orphaned — and no backup holds audio. Keep them until the user
+    // discards the old index ([discardCorruptIndexes]).
+    if (!corruptIndex.value) await _purgeOrphanedAudio();
+  }
+
+  static const _corruptSuffix = '.corrupt-';
+
+  /// True while an unreadable index is set aside next to the journal. The
+  /// orphan sweep pauses meanwhile; settings shows it.
+  final corruptIndex = ValueNotifier<bool>(false);
+
+  /// Indexes set aside because they couldn't be read. The export zips them
+  /// along, so the daily backups keep them after the local copy is gone.
+  Future<List<File>> corruptIndexFiles() async => [
+        await for (final f in _docsDir.list())
+          if (f is File &&
+              f.uri.pathSegments.last.startsWith('$_indexFileName$_corruptSuffix'))
+            f,
+      ];
+
+  /// Deletes the set-aside indexes. The next start sweeps orphaned audio
+  /// again, which includes every recording of their entries.
+  Future<void> discardCorruptIndexes() async {
+    for (final f in await corruptIndexFiles()) {
+      await f.delete();
+    }
+    corruptIndex.value = false;
   }
 
   /// False if the index exists but can't be read.
@@ -242,19 +276,25 @@ class JournalRepository {
   }
 
   /// Permanently remove every trashed entry (and its audio). Irreversible.
-  Future<void> emptyTrash() async {
-    final trashed = _entries.where((e) => e.deletedAt != null).toList();
+  ///
+  /// [only]: the ids the user was shown when confirming. A sync round may
+  /// trash more entries while the dialog is open; those were never seen and
+  /// stay. Ids restored meanwhile stay too — they are no longer trashed.
+  Future<void> emptyTrash({Set<String>? only}) async {
+    bool doomed(JournalEntry e) =>
+        e.deletedAt != null && (only == null || only.contains(e.id));
+    final trashed = _entries.where(doomed).toList();
+    if (trashed.isEmpty) return;
     final now = DateTime.now();
     _tracePurge(trashed, (_) => now);
-    _entries.removeWhere((e) => e.deletedAt != null);
+    _entries.removeWhere(doomed);
     await _persist();
     for (final e in trashed) {
       await _deleteAudio(e);
     }
   }
 
-  /// Purge trashed entries older than [trashRetention]. Called on load.
-  /// Runs the 30-day purge. At load on an unpaired device; on a paired one
+  /// Purges trashed entries older than [trashRetention]. At load on an unpaired device; on a paired one
   /// after each completed sync round (see [PurgeTrace.defersAutoPurge]).
   Future<void> purgeExpired() async {
     if (_autoPurge) await _purgeExpired();
@@ -269,8 +309,8 @@ class JournalRepository {
     // Nobody pressed anything, so this tombstone must not compete as "now":
     // a restore made on another device on day 29 that this device hasn't
     // pulled yet would lose to it (a paired device runs this only after a
-    // pull, but a restore may still land on the hub a second later). It competes as one millisecond after the entry's last known
-    // change: newer than the trashed version (so it propagates), older than
+    // pull, but a restore may still land on the hub a second later). It
+    // competes as one millisecond after the entry's last known change: newer than the trashed version (so it propagates), older than
     // any later restore or edit elsewhere (so those win). Every device
     // computes the same stamp, so the duplicate tombstones agree.
     _tracePurge(gone, (e) => e.changedAt.add(const Duration(milliseconds: 1)));

@@ -57,8 +57,8 @@ class JournalManager {
   // Every path here waits seconds on the network (the model) or the GPS, and
   // a sync round may run meanwhile and replace the entry with a version
   // edited on the laptop — one edited *after* the analysis started; an older
-  // one loses to the "analyzing" stamp by last-write-wins. So no path holds a JournalEntry across an await:
-  // it keeps the id, re-reads the entry afterwards, and writes only what it
+  // one loses to the "analyzing" stamp by last-write-wins. So no path holds a
+  // JournalEntry across an await: it keeps the id, re-reads the entry afterwards, and writes only what it
   // owns — see [_applyResult]. Writing the held object back would undo the
   // laptop's edit with a fresh stamp, and that stale version would then win
   // on every device.
@@ -331,8 +331,8 @@ class JournalManager {
   }
 
   /// Permanently empties the trash. Irreversible.
-  Future<void> emptyTrash() async {
-    await _repo.emptyTrash();
+  Future<void> emptyTrash({Set<String>? only}) async {
+    await _repo.emptyTrash(only: only);
     _refresh();
   }
 

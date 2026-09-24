@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mars_log/data/journal_repository.dart';
@@ -72,7 +73,10 @@ class Device {
   final Directory dir;
   Map<String, Object> prefs = {};
 
-  Device(this.id, this.dir);
+  /// False for the desktop hub, which leaves the 30-day purge to the phone.
+  final bool autoPurge;
+
+  Device(this.id, this.dir, {this.autoPurge = true});
 
   Future<T> run<T>(
     Future<T> Function(JournalRepository journal, LocalStorageService storage) body,
@@ -83,6 +87,7 @@ class Device {
     final journal = await JournalRepository.getInstance(
       purgeTrace: SyncPurgeTrace(storage),
       directory: dir,
+      autoPurge: autoPurge,
     );
     final result = await body(journal, storage);
     final raw = await SharedPreferences.getInstance();
@@ -606,15 +611,22 @@ void main() {
       expect(phone.audio('a.wav').existsSync(), isTrue);
     });
 
-    test('overlapping writes leave the newest state on disk', () async {
-      await phone.run((journal, _) async {
-        await journal.upsert(entry('a'));
-        await Future.wait([
-          journal.edit(journal.byId('a')!, place: 'Wien'),
-          journal.upsert(entry('b')),
-          journal.edit(journal.byId('a')!, tags: ['x']),
-        ]);
-      });
+    test('overlapping writes run one at a time, via a temp file, newest last',
+        () async {
+      final writes = _WriteLog();
+      await IOOverrides.runWithIOOverrides(
+        () => phone.run((journal, _) async {
+          await journal.upsert(entry('a'));
+          await Future.wait([
+            journal.edit(journal.byId('a')!, place: 'Wien'),
+            journal.upsert(entry('b')),
+            journal.edit(journal.byId('a')!, tags: ['x']),
+          ]);
+        }),
+        writes,
+      );
+      expect(writes.count, 4, reason: 'every write goes through the temp file');
+      expect(writes.maxInFlight, 1, reason: 'writes overlapped');
       await phone.run((journal, _) async {
         expect(journal.byId('a')!.place, 'Wien');
         expect(journal.byId('a')!.tags, ['x']);
@@ -622,4 +634,200 @@ void main() {
       });
     });
   });
+
+  group('review round 6', () {
+    late Directory tmp;
+    late FakeHub hub;
+    late SyncEncryptor key;
+    late Device phone;
+
+    setUp(() async {
+      tmp = await Directory.systemTemp.createTemp('mars_log_review6_');
+      hub = FakeHub();
+      key = await SyncEncryptor.generate();
+      phone = Device('phone', Directory('${tmp.path}/phone'));
+    });
+    tearDown(() => tmp.delete(recursive: true));
+
+    test('H1: a corrupt index is set aside and its audio survives later writes',
+        () async {
+      await phone.dir.create(recursive: true);
+      final index = File('${phone.dir.path}/entries.json');
+      await index.writeAsString('[{"id": "old", tru');
+      await phone.audio('old.wav').create(recursive: true);
+
+      await phone.run((journal, _) async {
+        expect(journal.allEntries, isEmpty);
+        expect(journal.corruptIndex.value, isTrue);
+        await journal.upsert(entry('new', audio: ['new.wav']));
+      });
+      await phone.audio('new.wav').create(recursive: true);
+
+      // Next start: the new index reads fine, old.wav belongs to nobody.
+      await phone.run((journal, _) async {
+        expect(journal.corruptIndex.value, isTrue);
+        final aside = await journal.corruptIndexFiles();
+        expect(aside, hasLength(1));
+        expect(await aside.single.readAsString(), '[{"id": "old", tru');
+      });
+      expect(phone.audio('old.wav').existsSync(), isTrue,
+          reason: 'the orphan sweep deleted the recordings of the lost index');
+
+      // Discarding the old index is the user's call; then the sweep resumes.
+      await phone.run((journal, _) async => journal.discardCorruptIndexes());
+      await phone.run((journal, _) async {
+        expect(journal.corruptIndex.value, isFalse);
+      });
+      expect(phone.audio('old.wav').existsSync(), isFalse);
+      expect(phone.audio('new.wav').existsSync(), isTrue);
+    });
+
+    test('after a corrupt index, a re-pair brings the entries back to their audio',
+        () async {
+      phone.prefs['flutter.sync_server_url'] = 'https://hub';
+      await phone.run((j, _) async => j.upsert(entry('a', audio: ['a.wav'])));
+      await phone.audio('a.wav').create(recursive: true);
+      await phone.sync(hub, key);
+      await phone.sync(hub, key); // the watermark now covers its own push
+
+      await File('${phone.dir.path}/entries.json').writeAsString('[{"id": "a", tru');
+      await phone.sync(hub, key);
+      await phone.run((j, _) async {
+        expect(j.byId('a'), isNull, reason: 'the pull watermark still says "seen"');
+      });
+
+      phone.prefs
+        ..remove('flutter.log_sync_last_synced_at')
+        ..removeWhere((k, _) => k.contains('last_seen'));
+      await phone.sync(hub, key);
+      await phone.run((j, _) async {
+        expect(j.byId('a')?.audioFileNames, ['a.wav']);
+      });
+      expect(phone.audio('a.wav').existsSync(), isTrue);
+    });
+
+    test('a failed write is made good by the next one', () async {
+      await phone.run((journal, _) async {
+        await journal.upsert(entry('a'));
+        final rev = journal.revision.value;
+        final blocker = Directory('${phone.dir.path}/entries.json.tmp');
+        await blocker.create();
+        await expectLater(
+            journal.edit(journal.byId('a')!, place: 'Wien'), throwsA(anything));
+        expect(journal.revision.value, rev, reason: 'no revision for a failed write');
+        await blocker.delete();
+        await journal.edit(journal.byId('a')!, tags: ['x']);
+        expect(journal.revision.value, rev + 1);
+      });
+      await phone.run((journal, _) async {
+        expect(journal.byId('a')!.place, 'Wien');
+        expect(journal.byId('a')!.tags, ['x']);
+      });
+    });
+
+    test('H2: hub restore undoes a 30-day purge without wiping the phone',
+        () async {
+      final laptop =
+          Device('laptop', Directory('${tmp.path}/laptop'), autoPurge: false);
+      for (final d in [phone, laptop]) {
+        d.prefs['flutter.sync_server_url'] = 'https://hub';
+      }
+
+      final trashedAt = DateTime.now().subtract(const Duration(days: 31));
+      final e = entry('a', deletedAt: trashedAt, audio: ['a.wav'])
+        ..changedAt = trashedAt;
+      for (final d in [phone, laptop]) {
+        await d.dir.create(recursive: true);
+        await File('${d.dir.path}/entries.json')
+            .writeAsString(jsonEncode([e.toJson()]));
+      }
+      await phone.audio('a.wav').create(recursive: true);
+      await phone.run((j, _) async => j.upsert(entry('keep', audio: ['keep.wav'])));
+      await phone.audio('keep.wav').create(recursive: true);
+
+      await laptop.sync(hub, key);
+      final snapshot = FakeHub()..push('laptop', [hub.row('a')!]);
+
+      await phone.sync(hub, key); // purges 'a' after the round
+      await tick();
+      await phone.sync(hub, key); // pushes the tombstone, prunes the trace
+      await laptop.sync(hub, key);
+      expect(hub.row('a')!.deletedAt, isNotNull);
+
+      // Recovery: hub from the snapshot, both devices re-paired (watermarks
+      // reset), laptop first — and the phone's data left alone.
+      hub = snapshot;
+      void rePair(Device d) => d.prefs
+        ..remove('flutter.log_sync_last_synced_at')
+        ..removeWhere((k, _) => k.contains('last_seen'));
+      rePair(laptop);
+      await laptop.sync(hub, key);
+      await laptop.run((j, _) async {
+        expect(j.byId('a')?.deletedAt, isNotNull, reason: 'back in the trash');
+        await j.restore(j.byId('a')!);
+      });
+      await tick();
+      await laptop.sync(hub, key);
+
+      rePair(phone);
+      await phone.sync(hub, key);
+      await tick();
+      await phone.sync(hub, key);
+      await phone.run((j, _) async {
+        expect(j.byId('a')?.deletedAt, isNull);
+        expect(j.byId('keep'), isNotNull);
+      });
+      expect(hub.row('a')!.deletedAt, isNull);
+      expect(phone.audio('keep.wav').existsSync(), isTrue);
+    });
+  });
+}
+
+/// Watches the journal's temp-file writes: how many, and how many at once
+/// (from the temp write until its rename lands). Each write is slowed down
+/// so writes that are not serialized would overlap.
+final class _WriteLog extends IOOverrides {
+  var count = 0;
+  var inFlight = 0;
+  var maxInFlight = 0;
+
+  @override
+  File createFile(String path) {
+    final file = super.createFile(path);
+    return path.endsWith('.tmp') ? _LoggedFile(file, this) : file;
+  }
+}
+
+class _LoggedFile implements File {
+  final File _file;
+  final _WriteLog _log;
+  _LoggedFile(this._file, this._log);
+
+  @override
+  String get path => _file.path;
+
+  @override
+  Future<File> writeAsString(
+    String contents, {
+    FileMode mode = FileMode.write,
+    Encoding encoding = utf8,
+    bool flush = false,
+  }) async {
+    _log.count++;
+    _log.maxInFlight = max(_log.maxInFlight, ++_log.inFlight);
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    return _file.writeAsString(contents, mode: mode, encoding: encoding, flush: flush);
+  }
+
+  @override
+  Future<File> rename(String newPath) async {
+    try {
+      return await _file.rename(newPath);
+    } finally {
+      _log.inFlight--;
+    }
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
