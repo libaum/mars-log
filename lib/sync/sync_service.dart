@@ -86,6 +86,17 @@ class SyncService {
     }
   }
 
+  /// Re-reads the pairing from storage and forgets that the key was ever
+  /// verified. For the desktop hub, where the hub URL and the secrets are
+  /// shared with the other modules and paired through one of them: after
+  /// any change there, this module must prove its key against the hub again
+  /// before it may push — otherwise a re-pair to a different hub would skip
+  /// the key check entirely.
+  Future<void> reload() async {
+    _keyVerified = false;
+    await init();
+  }
+
   String? get serverUrl => _storage.getSyncServerUrl();
 
   Future<String?> get deviceId => _keys.readDeviceId();
