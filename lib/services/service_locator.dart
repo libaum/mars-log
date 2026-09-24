@@ -58,7 +58,10 @@ Future<void> setupServiceLocator() async {
   getIt.registerSingleton<AnalysisTaskService>(AnalysisTaskService());
   getIt.registerSingleton<JournalManager>(JournalManager());
   getIt.registerSingleton<ExportService>(
-    ExportService(getIt<JournalRepository>()),
+    ExportService(
+      getIt<JournalRepository>(),
+      getIt<LocationHistoryRepository>(),
+    ),
   );
   getIt.registerSingleton<LockManager>(LockManager());
 

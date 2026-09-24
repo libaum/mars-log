@@ -6,15 +6,21 @@ import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:mars_log/data/journal_repository.dart';
+import 'package:mars_log/data/location_history_repository.dart';
+import 'package:mars_log/domain/day_location_point.dart';
 import 'package:mars_log/domain/journal_entry.dart';
 
 /// Zips the journal's `entries.json` (transcripts + metadata only, no audio —
-/// keeps exports small and fast) for backup, and restores it again.
-/// Export/import is the app's only safety net against data loss.
+/// keeps exports small and fast) and the background location history
+/// (`location_history.json`) for backup, and restores both again.
+///
+/// The location history is in no other backup: it doesn't sync, and the
+/// app opts out of Android's auto-backup to Google (`allowBackup="false"`).
 class ExportService {
   final JournalRepository _repository;
+  final LocationHistoryRepository _locations;
 
-  ExportService(this._repository);
+  ExportService(this._repository, this._locations);
 
   /// Builds the backup zip in the temp dir and returns its path.
   Future<String> _buildZip() async {
@@ -27,6 +33,10 @@ class ExportService {
     final index = _repository.indexFile;
     if (await index.exists()) {
       await encoder.addFile(index, 'entries.json');
+    }
+    final locations = _locations.file;
+    if (await locations.exists()) {
+      await encoder.addFile(locations, 'location_history.json');
     }
     await encoder.close();
     return zipPath;
@@ -62,7 +72,9 @@ class ExportService {
   }
 
   /// Lets the user pick a zip and merges its entries (transcripts + metadata
-  /// only) into the journal. Imported entries never carry audio, even if the
+  /// only) into the journal, and its location history into this device's
+  /// (see [LocationHistoryRepository.mergeExported]).
+  /// Imported entries never carry audio, even if the
   /// source export predates this and still contains an `audio/` folder — it
   /// is ignored. Returns the number of newly imported entries, or null if
   /// cancelled.
@@ -81,6 +93,17 @@ class ExportService {
 
     List<JournalEntry> imported = const [];
     final beforeIds = _repository.entries.map((e) => e.id).toSet();
+
+    for (final file in archive) {
+      if (!file.isFile || !file.name.endsWith('location_history.json')) continue;
+      final map = jsonDecode(utf8.decode(file.content as List<int>))
+          as Map<String, dynamic>;
+      await _locations.mergeExported([
+        for (final day in map.values)
+          for (final p in day as List<dynamic>)
+            DayLocationPoint.fromJson((p as Map).cast<String, dynamic>()),
+      ]);
+    }
 
     for (final file in archive) {
       if (!file.isFile || !file.name.endsWith('entries.json')) continue;

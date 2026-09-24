@@ -55,6 +55,10 @@ class LocationHistoryRepository {
 
   String get _path => '${_docsDir.path}/$_fileName';
 
+  /// The file on disk, for the export zip. Written by rename only, so a
+  /// reader always sees a complete version.
+  File get file => File(_path);
+
   String _dayKey(DateTime d) =>
       '${d.year.toString().padLeft(4, '0')}-'
       '${d.month.toString().padLeft(2, '0')}-'
@@ -95,6 +99,28 @@ class LocationHistoryRepository {
       (_byDay[_dayKey(point.timestamp)] ??= []).add(point);
     }
     await _persist();
+  }
+
+  /// Merges points from an export zip: adds every point not already held
+  /// (same time and position), whatever its source. Returns how many were
+  /// new. Re-importing the same export is therefore a no-op.
+  Future<int> mergeExported(List<DayLocationPoint> points) async {
+    if (points.isEmpty) return 0;
+    await reload();
+    String id(DayLocationPoint p) =>
+        '${p.timestamp.toUtc().millisecondsSinceEpoch}|${p.latitude}|${p.longitude}';
+    final known = _byDay.values.expand((l) => l).map(id).toSet();
+    var added = 0;
+    for (final p in points) {
+      if (!known.add(id(p))) continue;
+      (_byDay[_dayKey(p.timestamp)] ??= []).add(p);
+      added++;
+    }
+    for (final day in _byDay.values) {
+      day.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+    }
+    if (added > 0) await _persist();
+    return added;
   }
 
   /// Writes to a temp file and renames it over the real one. A plain
