@@ -11,11 +11,7 @@
          analysed, so a request in flight survives the app going to background -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
-    <!-- allowBackup=false: no Android auto-backup of journal, audio or
-         location history to the Google account. Backups are the app's own
-         export and the (E2E-encrypted) sync hub. -->
     <application
-        android:allowBackup="false"
         android:label="Mars Log"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">

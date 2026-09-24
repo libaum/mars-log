@@ -14,8 +14,8 @@ import 'package:mars_log/domain/journal_entry.dart';
 /// keeps exports small and fast) and the background location history
 /// (`location_history.json`) for backup, and restores both again.
 ///
-/// The location history is in no other backup: it doesn't sync, and the
-/// app opts out of Android's auto-backup to Google (`allowBackup="false"`).
+/// The location history doesn't sync, so apart from Android's own backup
+/// this zip is its only copy.
 class ExportService {
   final JournalRepository _repository;
   final LocationHistoryRepository _locations;
