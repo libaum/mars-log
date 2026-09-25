@@ -33,8 +33,8 @@ Managers expose state via `ValueNotifier`; UI subscribes with `ValueListenableBu
 | `JournalRepository` | Owns `entries.json` + `audio/` in app documents dir; in-memory list, persisted on every mutation. Delete is a soft-delete (`deletedAt`); trashed entries are purged on load after `trashRetention` (30 days) |
 | `LocalStorageService` | SharedPreferences: theme + lock flags + analysis version + reminder + "delete audio after transcription" flag (non-sensitive) |
 | `SecureStorageService` | flutter_secure_storage: PIN hash (sha256); deletes the old Gemini API key on start |
-| `OnDeviceAnalysisEngine` (`AnalysisEngine`) | Whisper `small` (`whisper_ggml`, model downloaded on first use) → transcript; Gemini Nano (`gemini_nano_android`) → summary/mood/dimensions/tags JSON, and the monthly recap (chunked, Nano's input window is small). `kAnalysisVersion` 2 |
-| `ExportService` | Zip export (`entries.json` + audio) via share sheet; import + merge by id |
+| `OnDeviceAnalysisEngine` (`AnalysisEngine`) | Whisper `small` (`whisper_ggml`, model downloaded on first use) → transcript; Gemini Nano (own platform channel `NanoChannel.kt` → ML Kit GenAI Prompt API, Dart side `GeminiNano`; downloads the model when AICore offers it, errors carry ML Kit's error code) → summary/mood/dimensions/tags JSON, and the monthly recap (chunked, Nano's input window is small). `kAnalysisVersion` 2 |
+| `ExportService` | Zip export (`entries.json`, `location_history.json`, `audio/`) built on disk and copied into a SAF folder (manual "Export" and the daily backup); streamed import merges entries by id and restores missing audio |
 | `RecordingManager` | Microphone lifecycle; records WAV 16 kHz mono; timer |
 | `LocationService` | Best-effort GPS + reverse-geocoded label for a new entry; silent/nullable, never throws |
 | `NotificationManager` | Optional evening reminder; schedules a rolling window of one-shots, skipping days that already have a log |
@@ -76,7 +76,7 @@ lib/
 ## Setup notes
 - Settings → "Analyse-Modelle vorbereiten" downloads Whisper ahead of the first recording and checks that Gemini Nano is available.
 - Android: `RECORD_AUDIO` + `INTERNET` + `POST_NOTIFICATIONS` + `ACCESS_COARSE/FINE_LOCATION` permissions; `MainActivity` extends `FlutterFragmentActivity` (required by `local_auth`); `minSdk` 23. Location is requested at first recording and is optional — denial just leaves entries without a location.
-- AGP 8.11.1 / Kotlin 2.2.20 / Gradle 8.14, pinned below the rest of the Mars ecosystem (2026-09): `share_plus` >=13.0.0 (required once `file_picker` is bumped past 8.x for AGP 9's compileSdk 36 floor) fails `compileDebugKotlin` under AGP 9's built-in Kotlin — unresolved references to its own `ShareSuccessManager`/`SharePlusPendingIntent` classes. Revisit once `share_plus` ships an AGP-9-compatible release.
+- AGP 8.11.1 / Kotlin 2.2.20 / Gradle 8.14, pinned below the rest of the Mars ecosystem (2026-09): originally because `share_plus` >=13 broke under AGP 9. `share_plus` is gone since 2026-09-25 (export no longer shares), so this can be revisited.
 
 ## Build Variants
 | Variant | Package | App Name |

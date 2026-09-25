@@ -16,6 +16,15 @@ const _months = [
 /// "10. Juli 2026"
 String formatLongDate(DateTime d) => '${d.day}. ${_months[d.month - 1]} ${d.year}';
 
+const _shortMonths = [
+  'Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun',
+  'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez',
+];
+
+/// "10. Jul 2026" — the entry detail's title, short enough for one line.
+String formatDayTitle(DateTime d) =>
+    '${d.day}. ${_shortMonths[d.month - 1]} ${d.year}';
+
 /// "10. Juli"
 String formatShortDate(DateTime d) => '${d.day}. ${_months[d.month - 1]}';
 

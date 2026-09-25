@@ -16,6 +16,10 @@ abstract class AnalysisEngine {
 
   Future<AnalysisResult> analyzeAudio(List<File> audioFiles);
 
+  /// Only the transcription step of [analyzeAudio] — so the transcript can
+  /// be kept even if the analysis after it fails.
+  Future<String> transcribe(List<File> audioFiles);
+
   Future<AnalysisResult> analyzeText(String transcript);
 
   /// A short recap of one month, from its entries' summaries in order.

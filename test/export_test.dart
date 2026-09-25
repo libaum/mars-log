@@ -7,6 +7,7 @@ import 'package:mars_log/data/export_service.dart';
 import 'package:mars_log/data/journal_repository.dart';
 import 'package:mars_log/data/location_history_repository.dart';
 import 'package:mars_log/domain/day_location_point.dart';
+import 'package:mars_log/domain/journal_entry.dart';
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 
@@ -25,6 +26,15 @@ DayLocationPoint _p(int minute) => DayLocationPoint(
       timestamp: DateTime(2026, 9, 1, 12, minute),
     );
 
+JournalEntry _entry(String id, List<String> audio) => JournalEntry(
+      id: id,
+      createdAt: DateTime(2026, 9, 1, 8),
+      day: DateTime(2026, 9, 1),
+      audioFileNames: [...audio],
+      status: EntryStatus.ready,
+      transcript: 'text',
+    );
+
 /// The location history is in no other backup (no sync, no Google
 /// auto-backup), so the export zip must carry it and import must restore it.
 void main() {
@@ -39,14 +49,51 @@ void main() {
 
   tearDown(() => tmp.delete(recursive: true));
 
-  test('the export zip carries the location history', () async {
+  test('the export zip carries the location history and the audio', () async {
     final journal = await JournalRepository.getInstance(directory: tmp);
     final locations = await LocationHistoryRepository.getInstance();
     await locations.addPoint(_p(0));
+    await File(journal.audioPath('a.m4a')).writeAsString('ton');
+    await journal.upsert(_entry('a', ['a.m4a']));
 
-    final bytes = await ExportService(journal, locations).buildZipBytes();
-    final names = ZipDecoder().decodeBytes(bytes).map((f) => f.name);
-    expect(names, contains('location_history.json'));
+    final zip = await ExportService(journal, locations).buildZipFile();
+    final names = ZipDecoder().decodeBytes(await zip.readAsBytes()).map((f) => f.name);
+    expect(names, containsAll(['entries.json', 'location_history.json', 'audio/a.m4a']));
+  });
+
+  test('importing an export on a fresh device brings entries and audio back', () async {
+    final journal = await JournalRepository.getInstance(directory: tmp);
+    final locations = await LocationHistoryRepository.getInstance();
+    await File(journal.audioPath('a.m4a')).writeAsString('ton');
+    await journal.upsert(_entry('a', ['a.m4a']));
+    final zip = await ExportService(journal, locations).buildZipFile();
+
+    final fresh = await Directory.systemTemp.createTemp('mars_log_fresh_');
+    addTearDown(() => fresh.delete(recursive: true));
+    await Directory('${fresh.path}/tmp').create();
+    PathProviderPlatform.instance = _Paths(fresh);
+    final journal2 = await JournalRepository.getInstance(directory: fresh);
+    final service2 = ExportService(journal2, await LocationHistoryRepository.getInstance());
+
+    expect(await service2.importZip(zip), 1);
+    final e = journal2.byId('a')!;
+    expect(e.audioFileNames, ['a.m4a']);
+    expect(e.audioDeleted, isFalse);
+    expect(await File(journal2.audioPath('a.m4a')).readAsString(), 'ton');
+  });
+
+  test('an old export without audio imports its entries as "audio discarded"', () async {
+    final journal = await JournalRepository.getInstance(directory: tmp);
+    final old = ZipFileEncoder()..create('${tmp.path}/old.zip');
+    final index = File('${tmp.path}/old_entries.json')
+      ..writeAsStringSync(jsonEncode([_entry('b', ['b.m4a']).toJson()]));
+    await old.addFile(index, 'entries.json');
+    await old.close();
+
+    final service = ExportService(journal, await LocationHistoryRepository.getInstance());
+    expect(await service.importZip(File('${tmp.path}/old.zip')), 1);
+    expect(journal.byId('b')!.audioDeleted, isTrue);
+    expect(journal.byId('b')!.audioFileNames, isEmpty);
   });
 
   test('merging an export adds missing points once', () async {

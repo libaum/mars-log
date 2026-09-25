@@ -43,18 +43,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final _onDevice = getIt<OnDeviceAnalysisEngine>();
   bool _preparingModels = false;
 
-  Future<void> _doExport() async {
-    try {
-      await _export.exportAndShare();
-    } catch (e) {
-      _snack('Export failed: $e');
-    }
-  }
-
   Future<void> _doExportToDisk() async {
     try {
-      final path = await _export.exportToDisk();
-      if (path != null) _snack('Saved.');
+      final folder = await _export.exportToFolder();
+      if (folder != null) _snack('Gespeichert in $folder.');
     } catch (e) {
       _snack('Save failed: $e');
     }
@@ -181,12 +173,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     setState(() => _preparingModels = true);
     try {
       await _onDevice.ensureWhisperModelDownloaded();
-      final nanoOk = await _onDevice.isNanoAvailable();
-      _snack(
-        nanoOk
-            ? 'Whisper-Modell bereit, Gemini Nano verfügbar.'
-            : 'Whisper-Modell bereit, Gemini Nano ist gerade nicht verfügbar.',
-      );
+      await _onDevice.ensureNanoReady();
+      _snack('Whisper und Gemini Nano sind bereit.');
     } catch (e) {
       _snack('Vorbereitung fehlgeschlagen: $e');
     } finally {
@@ -312,8 +300,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       : 'Analyse-Modelle vorbereiten',
                   _preparingModels ? () {} : _prepareOnDeviceModels,
                 ),
-                _actionRow('Export (share)', _doExport),
-                _actionRow('Export (save to device)', _doExportToDisk),
+                _actionRow('Export', _doExportToDisk),
                 _actionRow('Import', _doImport),
                 ValueListenableBuilder<String?>(
                   valueListenable: _dailyExport.folderNameNotifier,

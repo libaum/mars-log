@@ -222,7 +222,7 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text(formatLongDate(entry.day), style: TEXT_STYLE_TITLE),
+                    Text(formatDayTitle(entry.day), style: TEXT_STYLE_TITLE),
                     const SizedBox(width: 10),
                     Icon(Icons.edit_calendar_outlined,
                         size: 18, color: primary.withValues(alpha: 0.3)),

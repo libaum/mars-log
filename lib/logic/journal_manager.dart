@@ -117,8 +117,8 @@ class JournalManager {
     _inFlight.add(id);
     try {
       await _task.run(() async {
-        final partial = await engine
-            .analyzeAudio([File(_repo.audioPath(rec.fileName))]);
+        final partial =
+            await engine.transcribe([File(_repo.audioPath(rec.fileName))]);
         final live = _repo.byId(id);
         if (live == null) {
           orphaned = true;
@@ -127,7 +127,7 @@ class JournalManager {
         // Appended to the transcript as stored *now*: a correction made on
         // the laptop while this snippet was transcribed stays.
         live.deletedAt = null; // same rule if it was trashed meanwhile
-        live.transcript = [live.transcript, partial.transcript]
+        live.transcript = [live.transcript, partial]
             .where((t) => t != null && t.isNotEmpty)
             .join('\n\n');
         final dropSnippet = live.audioDeleted;
@@ -166,24 +166,46 @@ class JournalManager {
     await _analyze(live.id, _engine);
   }
 
-  Future<void> _analyze(String id, AnalysisEngine engine) async {
+  /// [retranscribe]: run Whisper over the audio again. False when the entry
+  /// already has a transcript from an earlier pass whose analysis failed —
+  /// then only the analysis is repeated.
+  Future<void> _analyze(
+    String id,
+    AnalysisEngine engine, {
+    bool retranscribe = true,
+  }) async {
     final start = _repo.byId(id);
     if (start == null) return;
+    // The baseline for [_applyResult]'s field guard: what the entry held when
+    // the analysis started. Deliberately not refreshed below — an edit made
+    // meanwhile must keep counting as newer intent.
     final before = _snapshot(start);
     _inFlight.add(id);
     try {
       await _task.run(() async {
+        var text = before.transcript ?? '';
         // Once the audio is gone, the transcript is the only source to work
         // from.
-        final result = before.audioDeleted
-            ? await engine.analyzeText(before.transcript ?? '')
-            : await engine.analyzeAudio(
-                before.audioFileNames
-                    .map((f) => File(_repo.audioPath(f)))
-                    .toList(),
-              );
+        if (!before.audioDeleted && retranscribe) {
+          final transcript = await engine.transcribe(
+            before.audioFileNames.map((f) => File(_repo.audioPath(f))).toList(),
+          );
+          // Kept right away: Whisper took its time, and if the analysis
+          // after it fails (Nano unavailable, app in the background), the
+          // transcript must not be lost with it. A transcript corrected by
+          // hand meanwhile wins, and is what gets analysed.
+          final live = _repo.byId(id);
+          if (live == null) return;
+          if (_same(live.transcript, before.transcript)) {
+            live.transcript = transcript;
+            await _repo.upsert(live);
+            _refresh();
+          }
+          text = _repo.byId(id)?.transcript ?? transcript;
+        }
+        final result = await engine.analyzeText(text);
         await _applyResult(id, before, result, engine.modelName,
-            withTranscript: true);
+            withTranscript: false);
       });
     } catch (e) {
       await _markFailed(id, e);
@@ -260,8 +282,10 @@ class JournalManager {
       if (entry.status == EntryStatus.analyzing) {
         await _analyze(entry.id, _engine);
       } else if (entry.status == EntryStatus.failed && _retried.add(entry.id)) {
-        // On-device: a retry costs nothing but a few seconds.
-        await _analyze(entry.id, _engine);
+        // On-device: a retry costs nothing but a few seconds. A transcript
+        // that survived the failure is reused — only the analysis failed.
+        final hasTranscript = (entry.transcript ?? '').trim().isNotEmpty;
+        await _analyze(entry.id, _engine, retranscribe: !hasTranscript);
       }
     }
   }

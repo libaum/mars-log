@@ -35,7 +35,7 @@ android {
 
     defaultConfig {
         applicationId = "com.catchingclouds.marslog"
-        // gemini_nano_android (offline-analysis branch) needs API 26+
+        // ML Kit GenAI (Gemini Nano, see NanoChannel.kt) needs API 26+
         minSdk = maxOf(flutter.minSdkVersion, 26)
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
@@ -69,6 +69,10 @@ android {
 
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+    // Gemini Nano on the device (AICore) — see NanoChannel.kt.
+    implementation("com.google.mlkit:genai-prompt:1.0.0-beta4")
+    // Dispatchers.Main for NanoChannel; genai-prompt only brings coroutines-core.
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
 }
 
 kotlin {

@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
-import 'package:gemini_nano_android/gemini_nano_android.dart';
 import 'package:mars_log/data/analysis_engine.dart';
+import 'package:mars_log/data/gemini_nano.dart';
 import 'package:mars_log/domain/journal_entry.dart';
 import 'package:whisper_ggml/whisper_ggml.dart';
 
@@ -19,13 +19,13 @@ class OnDeviceAnalysisException implements Exception {
 
 /// The app's analysis engine: transcribes audio locally
 /// with Whisper (whisper.cpp via `whisper_ggml`), then runs the summary/mood/
-/// tags step through Gemini Nano on-device via AICore (`gemini_nano_android`).
+/// tags step through Gemini Nano on-device via AICore ([GeminiNano]).
 /// Gemini Nano itself only takes text, so audio always goes through Whisper
 /// first, then the merged transcript through Nano — for text-only
 /// re-analysis Nano runs directly.
 class OnDeviceAnalysisEngine implements AnalysisEngine {
   final _whisper = WhisperController();
-  final _nano = GeminiNanoAndroid();
+  final _nano = GeminiNano();
 
   @override
   String get modelName => kOnDeviceModelName;
@@ -54,12 +54,16 @@ Transkript:
     await _whisper.downloadModel(kOnDeviceWhisperModel);
   }
 
-  /// Checks whether Gemini Nano is available on this device (AICore support
-  /// + model downloaded). Doesn't throw.
-  Future<bool> isNanoAvailable() => _nano.isAvailable();
+  /// Makes sure Gemini Nano is on the device (downloads it if needed).
+  /// Throws [NanoException] with the reason if it can't run.
+  Future<void> ensureNanoReady() => _nano.ensureReady();
 
   @override
-  Future<AnalysisResult> analyzeAudio(List<File> audioFiles) async {
+  Future<AnalysisResult> analyzeAudio(List<File> audioFiles) async =>
+      analyzeText(await transcribe(audioFiles));
+
+  @override
+  Future<String> transcribe(List<File> audioFiles) async {
     // First use downloads the model (a few hundred MB, from Hugging Face, not
     // Google). A no-op afterwards.
     await ensureWhisperModelDownloaded();
@@ -82,7 +86,7 @@ Transkript:
         'Whisper konnte kein Transkript erzeugen (Modell heruntergeladen?).',
       );
     }
-    return analyzeText(transcript);
+    return transcript;
   }
 
   @override
@@ -90,20 +94,11 @@ Transkript:
     if (transcript.trim().isEmpty) {
       throw OnDeviceAnalysisException('Kein Transkript vorhanden.');
     }
-    if (!await _nano.isAvailable()) {
-      throw OnDeviceAnalysisException(
-        'Gemini Nano ist auf diesem Gerät nicht verfügbar.',
-      );
-    }
-    final candidates = await _nano.generate(
-      prompt: '$_promptText$transcript',
-      temperature: 0.4,
-      maxOutputTokens: 256,
-    );
-    if (candidates.isEmpty) {
+    final answer = await _nano.generate('$_promptText$transcript');
+    if (answer.isEmpty) {
       throw OnDeviceAnalysisException('Gemini Nano lieferte keine Antwort.');
     }
-    final data = _extractJson(candidates.first);
+    final data = _extractJson(answer);
     return AnalysisResult(
       transcript: transcript,
       summary: (data['summary'] as String?)?.trim() ?? '',
@@ -142,9 +137,6 @@ Einträge:
     if (summaries.isEmpty) {
       throw OnDeviceAnalysisException('Keine Einträge für diesen Monat.');
     }
-    if (!await _nano.isAvailable()) {
-      throw OnDeviceAnalysisException('Gemini Nano ist gerade nicht verfügbar.');
-    }
     final lines = summaries.map((s) => '- ${s.trim()}').toList();
     if (lines.join('\n').length <= _maxMonthChars) {
       return _recap(lines.join('\n'));
@@ -166,12 +158,7 @@ Einträge:
   }
 
   Future<String> _recap(String body) async {
-    final candidates = await _nano.generate(
-      prompt: '$_promptMonth$body',
-      temperature: 0.5,
-      maxOutputTokens: 256,
-    );
-    final text = candidates.isEmpty ? '' : candidates.first.trim();
+    final text = await _nano.generate('$_promptMonth$body', temperature: 0.5);
     if (text.isEmpty) {
       throw OnDeviceAnalysisException('Gemini Nano lieferte keinen Rückblick.');
     }

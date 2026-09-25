@@ -5,7 +5,6 @@ import 'package:mars_log/data/local_storage_service.dart';
 import 'package:mars_log/data/location_history_repository.dart';
 import 'package:mars_log/logic/background_tasks.dart';
 import 'package:mars_log/services/service_locator.dart';
-import 'package:saf_stream/saf_stream.dart';
 import 'package:saf_util/saf_util.dart';
 import 'package:workmanager/workmanager.dart';
 
@@ -17,8 +16,8 @@ const _backupPrefix = 'mars_log_backup_';
 
 /// How many daily backups to keep. One file per day, so this is also how far
 /// back you can reach — long enough to notice something went wrong days after
-/// the fact, and the zips are small (transcripts, metadata and location
-/// history, no audio).
+/// the fact. The zips carry the audio too, so they grow with the journal —
+/// seven of them is the price of the recordings being backed up at all.
 const _keepBackups = 7;
 
 /// Best-effort daily backup zip, written into the SAF folder the user picked
@@ -33,16 +32,9 @@ Future<void> runDailyExport() async {
     // Read-only: the app may be running (and recording) in the other isolate.
     final repo = await JournalRepository.getInstance(readOnly: true);
     final locations = await LocationHistoryRepository.getInstance();
-    final bytes = await ExportService(repo, locations).buildZipBytes();
-
     final stamp = DateTime.now().toIso8601String().split('T').first;
-    await SafStream().writeFileBytes(
-      folderUri,
-      '$_backupPrefix$stamp.zip',
-      'application/zip',
-      bytes,
-      overwrite: true,
-    );
+    await ExportService(repo, locations)
+        .exportTo(folderUri, '$_backupPrefix$stamp.zip', overwrite: true);
 
     await _pruneOldBackups(folderUri);
   } catch (_) {

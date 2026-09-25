@@ -26,10 +26,14 @@ class _Engine extends Fake implements AnalysisEngine {
   String get modelName => 'fake';
 
   @override
-  Future<AnalysisResult> analyzeAudio(List<File> audioFiles) async {
+  Future<String> transcribe(List<File> audioFiles) async {
     await gate.future;
-    return respond(null);
+    return respond(null).transcript;
   }
+
+  @override
+  Future<AnalysisResult> analyzeAudio(List<File> audioFiles) async =>
+      analyzeText(await transcribe(audioFiles));
 
   @override
   Future<AnalysisResult> analyzeText(String transcript) async => respond(transcript);
@@ -236,6 +240,35 @@ void main() {
       final e = journal.byId('a')!;
       expect(e.deletedAt, isNull);
       expect(e.audioFileNames, contains('b.wav'));
+    });
+  });
+
+  test('a failed analysis keeps the transcript, and the retry reuses it', () async {
+    await phone.run((journal, storage) async {
+      await phone.audio('a.wav').create(recursive: true);
+      await journal.upsert(entry('a', transcript: '', audio: ['a.wav']));
+      var nanoFails = true;
+      var transcriptions = 0;
+      final engine = _Engine((text) {
+        if (text == null) {
+          transcriptions++;
+          return _result(transcript: 'von Whisper');
+        }
+        if (nanoFails) throw Exception('BACKGROUND_USE_BLOCKED');
+        return _result(transcript: text, summary: 'später');
+      });
+      engine.gate.complete();
+      final manager = _manager(journal, storage, engine);
+
+      await manager.reanalyze(journal.byId('a')!);
+      expect(journal.byId('a')!.status, EntryStatus.failed);
+      expect(journal.byId('a')!.transcript, 'von Whisper');
+
+      nanoFails = false;
+      await manager.resumePending();
+      expect(journal.byId('a')!.status, EntryStatus.ready);
+      expect(journal.byId('a')!.summary, 'später');
+      expect(transcriptions, 1, reason: 'Whisper ran again for a kept transcript');
     });
   });
 
