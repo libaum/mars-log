@@ -2,7 +2,7 @@ import 'dart:io';
 import 'package:mars_log/domain/journal_entry.dart';
 
 /// Bump when the prompt or schema changes, so entries can be re-analysed later.
-/// 2: analysis moved on-device (Whisper + Gemini Nano); no cloud AI anymore.
+/// 2: analysis moved on-device (Whisper + Gemma 4 E2B); no cloud AI anymore.
 const kAnalysisVersion = 2;
 
 /// Anything that can turn audio (or a transcript) into an [AnalysisResult].

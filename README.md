@@ -24,7 +24,7 @@ audio sent for transcription.
 ## Setup
 
 Transcription and analysis run on the phone: Whisper (downloaded on first
-use) and Gemini Nano via Android AICore, which needs a supported device.
+use) and an open model, Gemma 4 E2B (~2.6 GB, downloaded on first use).
 No journal content goes to a cloud AI.
 
 ## Install
@@ -39,7 +39,7 @@ No journal content goes to a cloud AI.
 - GetIt (dependency injection)
 - ValueNotifier + ValueListenableBuilder (state)
 - SharedPreferences + flutter_secure_storage (local & encrypted persistence)
-- `record` (audio) · Whisper via `whisper_ggml` (transcript) · Gemini Nano on-device (analysis) · `local_auth` (unlock)
+- `record` (audio) · Whisper via `whisper_ggml` (transcript) · Gemma 4 E2B via `flutter_gemma` (analysis) · `local_auth` (unlock)
 
 ## Design
 

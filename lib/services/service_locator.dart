@@ -47,7 +47,7 @@ Future<void> setupServiceLocator() async {
   );
   getIt.registerSingleton<LocationService>(LocationService());
 
-  // The only engine: Whisper + Gemini Nano on the phone. Registered under
+  // The only engine: Whisper + Gemma on the phone. Registered under
   // both types — settings needs its model download, the rest just analyzes.
   final engine = OnDeviceAnalysisEngine();
   getIt.registerSingleton<OnDeviceAnalysisEngine>(engine);

@@ -7,9 +7,8 @@ import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 /// Android moves a backgrounded app into the cached bucket and freezes it after
 /// a few seconds, which would stop a running Whisper transcription midway. A
 /// foreground service lifts the process out of that bucket for as long as it
-/// runs, so the transcription survives the app being sent to the background.
-/// (Gemini Nano itself refuses to run in the background regardless — see
-/// [JournalManager.resumePending].)
+/// runs, so the transcription and analysis survive the app being sent to the
+/// background.
 ///
 /// The work itself stays in the main isolate; the service is only there for the
 /// priority bump, so it needs no task handler. Calls are ref-counted, so

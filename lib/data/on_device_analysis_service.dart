@@ -1,14 +1,15 @@
+import 'package:flutter/foundation.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'package:mars_log/data/analysis_engine.dart';
-import 'package:mars_log/data/gemini_nano.dart';
+import 'package:mars_log/data/local_llm.dart';
 import 'package:mars_log/domain/journal_entry.dart';
 import 'package:whisper_ggml/whisper_ggml.dart';
 
 /// Whisper model used for on-device transcription. `small` is the practical
 /// floor for usable German accuracy — `tiny`/`base` hallucinate too much.
 const kOnDeviceWhisperModel = WhisperModel.small;
-const kOnDeviceModelName = 'whisper-small+gemini-nano';
+const kOnDeviceModelName = 'whisper-small+${LocalLlm.modelName}';
 
 class OnDeviceAnalysisException implements Exception {
   final String message;
@@ -19,13 +20,15 @@ class OnDeviceAnalysisException implements Exception {
 
 /// The app's analysis engine: transcribes audio locally
 /// with Whisper (whisper.cpp via `whisper_ggml`), then runs the summary/mood/
-/// tags step through Gemini Nano on-device via AICore ([GeminiNano]).
-/// Gemini Nano itself only takes text, so audio always goes through Whisper
-/// first, then the merged transcript through Nano — for text-only
-/// re-analysis Nano runs directly.
+/// tags step through an open model on the phone ([LocalLlm], Gemma 4 E2B).
+/// Audio always goes through Whisper first, then the transcript through the
+/// model — for text-only re-analysis the model runs directly.
 class OnDeviceAnalysisEngine implements AnalysisEngine {
   final _whisper = WhisperController();
-  final _nano = GeminiNano();
+  final _llm = LocalLlm();
+
+  /// Download progress of the analysis model, for settings.
+  ValueListenable<int?> get llmProgress => _llm.progress;
 
   @override
   String get modelName => kOnDeviceModelName;
@@ -54,9 +57,9 @@ Transkript:
     await _whisper.downloadModel(kOnDeviceWhisperModel);
   }
 
-  /// Makes sure Gemini Nano is on the device (downloads it if needed).
-  /// Throws [NanoException] with the reason if it can't run.
-  Future<void> ensureNanoReady() => _nano.ensureReady();
+  /// Makes sure the analysis model is on the device (downloads ~2.6 GB on
+  /// first use).
+  Future<void> ensureLlmReady() => _llm.ensureReady();
 
   @override
   Future<AnalysisResult> analyzeAudio(List<File> audioFiles) async =>
@@ -94,9 +97,9 @@ Transkript:
     if (transcript.trim().isEmpty) {
       throw OnDeviceAnalysisException('Kein Transkript vorhanden.');
     }
-    final answer = await _nano.generate('$_promptText$transcript');
+    final answer = await _llm.generate('$_promptText$transcript');
     if (answer.isEmpty) {
-      throw OnDeviceAnalysisException('Gemini Nano lieferte keine Antwort.');
+      throw OnDeviceAnalysisException('Das Analysemodell lieferte keine Antwort.');
     }
     final data = _extractJson(answer);
     return AnalysisResult(
@@ -128,8 +131,8 @@ was wiederkehrt. Nur der Text, keine Überschrift, kein Markdown.
 Einträge:
 ''';
 
-  /// Nano's input window is small (a few thousand tokens), so a long month
-  /// is recapped in parts first and the parts are then recapped together.
+  /// The model's context is 4096 tokens here, so a long month is recapped in
+  /// parts first and the parts are then recapped together.
   static const _maxMonthChars = 6000;
 
   @override
@@ -158,14 +161,14 @@ Einträge:
   }
 
   Future<String> _recap(String body) async {
-    final text = await _nano.generate('$_promptMonth$body', temperature: 0.5);
+    final text = await _llm.generate('$_promptMonth$body', temperature: 0.5);
     if (text.isEmpty) {
-      throw OnDeviceAnalysisException('Gemini Nano lieferte keinen Rückblick.');
+      throw OnDeviceAnalysisException('Das Analysemodell lieferte keinen Rückblick.');
     }
     return text;
   }
 
-  /// Gemini Nano has no schema enforcement — extract the first `{...}` block
+  /// The model has no schema enforcement — extract the first `{...}` block
   /// rather than trusting the whole response to be clean JSON.
   Map<String, dynamic> _extractJson(String text) {
     try {
@@ -174,14 +177,14 @@ Einträge:
       final match = RegExp(r'\{[\s\S]*\}').firstMatch(text);
       if (match == null) {
         throw OnDeviceAnalysisException(
-          'Antwort von Gemini Nano konnte nicht gelesen werden.',
+          'Antwort des Analysemodells konnte nicht gelesen werden.',
         );
       }
       try {
         return jsonDecode(match.group(0)!) as Map<String, dynamic>;
       } catch (e) {
         throw OnDeviceAnalysisException(
-          'Antwort von Gemini Nano konnte nicht gelesen werden: $e',
+          'Antwort des Analysemodells konnte nicht gelesen werden: $e',
         );
       }
     }

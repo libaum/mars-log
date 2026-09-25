@@ -173,8 +173,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     setState(() => _preparingModels = true);
     try {
       await _onDevice.ensureWhisperModelDownloaded();
-      await _onDevice.ensureNanoReady();
-      _snack('Whisper und Gemini Nano sind bereit.');
+      await _onDevice.ensureLlmReady();
+      _snack('Whisper und das Analysemodell sind bereit.');
     } catch (e) {
       _snack('Vorbereitung fehlgeschlagen: $e');
     } finally {
@@ -291,14 +291,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     !_storage.getDeleteAudioAfterTranscription(),
                   ),
                 ),
-                // Analysis runs on the phone (Whisper + Gemini Nano); the
-                // first recording downloads Whisper by itself, this just
-                // does it ahead of time and checks Nano.
-                _actionRow(
-                  _preparingModels
-                      ? 'Modelle werden vorbereitet…'
-                      : 'Analyse-Modelle vorbereiten',
-                  _preparingModels ? () {} : _prepareOnDeviceModels,
+                // Analysis runs on the phone (Whisper + Gemma); the first
+                // recording downloads both by itself (~3 GB), this just does
+                // it ahead of time, on Wi-Fi, with progress.
+                ValueListenableBuilder<int?>(
+                  valueListenable: _onDevice.llmProgress,
+                  builder: (context, progress, _) => _actionRow(
+                    progress != null
+                        ? 'Analysemodell wird geladen… $progress %'
+                        : _preparingModels
+                            ? 'Modelle werden vorbereitet…'
+                            : 'Analyse-Modelle vorbereiten (~3 GB)',
+                    _preparingModels ? () {} : _prepareOnDeviceModels,
+                  ),
                 ),
                 _actionRow('Export', _doExportToDisk),
                 _actionRow('Import', _doImport),

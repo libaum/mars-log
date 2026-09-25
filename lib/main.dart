@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_gemma/flutter_gemma.dart';
+import 'package:flutter_gemma_litertlm/flutter_gemma_litertlm.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:mars_log/logic/journal_manager.dart';
 import 'package:mars_log/logic/lock_manager.dart';
@@ -12,6 +14,8 @@ import 'package:mars_log/theme/theme_manager.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+  // The analysis model's runtime (LocalLlm). Only the .litertlm engine.
+  await FlutterGemma.initialize(inferenceEngines: const [LiteRtLmEngine()]);
   await setupServiceLocator();
   getIt<LockManager>().lockIfEnabled();
   runApp(const MarsLog());

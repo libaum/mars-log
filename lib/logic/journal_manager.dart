@@ -12,7 +12,7 @@ import 'package:mars_log/services/service_locator.dart';
 
 /// Core state manager for the journal. Coordinates recording → entry creation →
 /// analysis, and exposes the live entry list to the UI. Analysis goes through
-/// the [AnalysisEngine] — on-device Whisper + Gemini Nano, nothing leaves the
+/// the [AnalysisEngine] — on-device Whisper + Gemma, nothing leaves the
 /// phone.
 class JournalManager {
   final _repo = getIt<JournalRepository>();
@@ -25,10 +25,9 @@ class JournalManager {
   /// doesn't start a second pass over one that is simply still working.
   final _inFlight = <String>{};
 
-  /// Failed entries already retried once in this app session. Gemini Nano
-  /// refuses to run while the app is in the background, so an entry recorded
-  /// just before switching away fails — one automatic retry back in the
-  /// foreground fixes that; a loop of them would not help.
+  /// Failed entries already retried once in this app session — a model
+  /// download cut off, the process killed mid-analysis: one automatic retry
+  /// fixes that; a loop of them would not help.
   final _retried = <String>{};
 
   late final ValueNotifier<List<JournalEntry>> entriesNotifier;
@@ -191,7 +190,7 @@ class JournalManager {
             before.audioFileNames.map((f) => File(_repo.audioPath(f))).toList(),
           );
           // Kept right away: Whisper took its time, and if the analysis
-          // after it fails (Nano unavailable, app in the background), the
+          // after it fails (model not downloaded yet, process killed), the
           // transcript must not be lost with it. A transcript corrected by
           // hand meanwhile wins, and is what gets analysed.
           final live = _repo.byId(id);
@@ -273,9 +272,9 @@ class JournalManager {
 
   /// Second line of defence behind the foreground service: if the process was
   /// killed (or frozen hard enough to kill the request) mid-analysis, the entry
-  /// is still sitting in `entries.json` as `analyzing` — or as `failed`
-  /// because Nano refused to run in the background. Called on app start and whenever the app comes back to
-  /// the foreground; picks those up and runs them again.
+  /// is still sitting in `entries.json` as `analyzing` — or as `failed`.
+  /// Called on app start and whenever the app comes back to the foreground;
+  /// picks those up and runs them again.
   Future<void> resumePending() async {
     for (final entry in _repo.entries) {
       if (_inFlight.contains(entry.id)) continue;
