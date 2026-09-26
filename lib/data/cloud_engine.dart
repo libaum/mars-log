@@ -248,7 +248,10 @@ Zusammenfassungen:
     } catch (_) {}
     final detail = message == null ? '' : ': $message';
     return switch (status) {
-      400 || 401 || 403 => '$provider lehnt die Anfrage ab — API-Key prüfen. ($status$detail)',
+      401 => '$provider kennt diesen API-Key nicht — Key prüfen. ($status$detail)',
+      // A valid key without access to this model (e.g. a free plan).
+      403 => '$provider: Modell $model ist für dieses Konto nicht freigeschaltet. ($status$detail)',
+      400 => '$provider lehnt die Anfrage ab. ($status$detail)',
       429 => '$provider-Kontingent erschöpft — später erneut versuchen.',
       _ => '$provider-Fehler $status$detail',
     };

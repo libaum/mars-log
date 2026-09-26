@@ -155,7 +155,7 @@ void main() {
     );
     await expectLater(
       selected.analyzeText('x'),
-      throwsA(isA<CloudException>().having((e) => e.message, 'message', contains('API-Key'))),
+      throwsA(isA<CloudException>().having((e) => e.message, 'message', contains('Key prüfen'))),
     );
   });
 
@@ -191,5 +191,21 @@ void main() {
     expect(AnalysisProvider.byName(null), AnalysisProvider.device);
     expect(AnalysisProvider.byName('cloud'), AnalysisProvider.device,
         reason: 'the old audio-to-Gemini value must not switch a provider on');
+  });
+
+  test('a model the plan lacks is named as such, not as a bad key', () async {
+    final fake = _FakeServer(_mistralReply, status: 403);
+    await fake.start();
+    addTearDown(fake.server.close);
+    final engine = MistralTextEngine(
+      transcriber: _Local(),
+      apiKey: () async => 'free-plan',
+      endpoint: fake.uri('/v1/chat/completions'),
+    );
+    await expectLater(
+      engine.analyzeText('x'),
+      throwsA(isA<CloudException>()
+          .having((e) => e.message, 'message', contains('nicht freigeschaltet'))),
+    );
   });
 }
