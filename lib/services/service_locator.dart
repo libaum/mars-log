@@ -1,6 +1,7 @@
 import 'package:get_it/get_it.dart';
 import 'package:mars_log/data/analysis_engine.dart';
 import 'package:mars_log/data/export_service.dart';
+import 'package:mars_log/data/gemini_engine.dart';
 import 'package:mars_log/data/journal_repository.dart';
 import 'package:mars_log/data/local_storage_service.dart';
 import 'package:mars_log/data/on_device_analysis_service.dart';
@@ -47,12 +48,17 @@ Future<void> setupServiceLocator() async {
   );
   getIt.registerSingleton<LocationService>(LocationService());
 
-  // The only engine: Whisper + Gemma on the phone. Registered under
-  // both types — settings needs its model download, the rest just analyzes.
-  final engine = OnDeviceAnalysisEngine();
-  getIt.registerSingleton<OnDeviceAnalysisEngine>(engine);
-  getIt.registerSingleton<AnalysisEngine>(engine);
-  getIt<SecureStorageService>().forgetLegacyApiKey();
+  // Transcription is always Whisper on the phone; the analysis is Gemma on
+  // the phone or — if chosen in settings — Gemini from the transcript.
+  final onDevice = OnDeviceAnalysisEngine();
+  getIt.registerSingleton<OnDeviceAnalysisEngine>(onDevice);
+  final secure = getIt<SecureStorageService>();
+  final storage = getIt<LocalStorageService>();
+  getIt.registerSingleton<AnalysisEngine>(SelectedAnalysisEngine(
+    onDevice: onDevice,
+    cloud: GeminiTextEngine(transcriber: onDevice, apiKey: secure.getApiKey),
+    useCloud: storage.getCloudAnalysis,
+  ));
 
   getIt.registerSingleton<ThemeManager>(ThemeManager());
   getIt.registerSingleton<SettingsManager>(SettingsManager());

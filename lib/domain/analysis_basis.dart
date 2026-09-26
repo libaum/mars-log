@@ -7,10 +7,14 @@ import 'package:crypto/crypto.dart';
 String transcriptBasis(String? transcript) =>
     sha256.convert(utf8.encode((transcript ?? '').trim())).toString().substring(0, 16);
 
-/// Who produced an entry's analysis. The laptop's model is the better one:
-/// its analysis replaces the phone's quick pre-analysis, never the other way
-/// round unless the phone re-analyses on purpose.
+/// Who produced an entry's analysis.
+///
+/// - [phone]: the on-device model's quick pre-analysis — the laptop replaces it.
+/// - [laptop]: the laptop's local model (Ollama).
+/// - [cloud]: Gemini from the transcript (the phone's cloud option) — better
+///   than the laptop's model, so the laptop keeps it.
 abstract final class AnalysisSource {
   static const phone = 'phone';
   static const laptop = 'laptop';
+  static const cloud = 'cloud';
 }

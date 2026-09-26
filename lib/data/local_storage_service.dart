@@ -85,6 +85,12 @@ class LocalStorageService {
   Future<void> setMonthReview(String monthKey, String text) =>
       _prefs.setString('$_keyMonthReviewPrefix$monthKey', text);
 
+  /// Whether the analysis (not the transcription) goes to Gemini instead of
+  /// the on-device model. A new key: an old 'analysis_engine' = 'cloud' meant
+  /// audio to the cloud and must not switch this on by itself.
+  bool getCloudAnalysis() => _prefs.getBool('analysis_cloud_text') ?? false;
+  Future<void> setCloudAnalysis(bool v) => _prefs.setBool('analysis_cloud_text', v);
+
   /// Background location tracking: a few GPS fixes a day, independent of
   /// journal entries (see [LocationTrackingManager]).
   bool getLocationTrackingEnabled() =>

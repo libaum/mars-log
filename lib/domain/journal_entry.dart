@@ -296,6 +296,12 @@ class AnalysisResult {
   final Map<String, int> dimensions;
   final List<String> tags;
 
+  /// Who produced it, for [JournalEntry.analysisModel] / analysisSource —
+  /// set by the engine that actually answered (a cloud engine may have
+  /// fallen back to the on-device one).
+  final String? model;
+  final String? source;
+
   AnalysisResult({
     required this.transcript,
     this.title = '',
@@ -304,5 +310,7 @@ class AnalysisResult {
     required this.moodScore,
     required this.dimensions,
     required this.tags,
+    this.model,
+    this.source,
   });
 }

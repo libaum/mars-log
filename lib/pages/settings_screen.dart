@@ -4,6 +4,7 @@ import 'package:mars_log/data/journal_repository.dart';
 import 'package:mars_log/data/google_timeline_import_service.dart';
 import 'package:mars_log/data/local_storage_service.dart';
 import 'package:mars_log/data/on_device_analysis_service.dart';
+import 'package:mars_log/data/secure_storage_service.dart';
 import 'package:mars_log/domain/journal_entry.dart';
 import 'package:mars_log/logic/daily_export_manager.dart';
 import 'package:mars_log/logic/journal_manager.dart';
@@ -41,6 +42,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _importingTimeline = false;
   final _storage = getIt<LocalStorageService>();
   final _onDevice = getIt<OnDeviceAnalysisEngine>();
+  final _secure = getIt<SecureStorageService>();
   bool _preparingModels = false;
 
   Future<void> _doExportToDisk() async {
@@ -169,6 +171,54 @@ class _SettingsScreenState extends State<SettingsScreen> {
     setState(() {});
   }
 
+  Future<void> _toggleCloudAnalysis(bool on) async {
+    await _storage.setCloudAnalysis(on);
+    setState(() {});
+    if (on && ((await _secure.getApiKey()) ?? '').isEmpty) await _editApiKey();
+  }
+
+  Future<void> _editApiKey() async {
+    final controller = TextEditingController(text: await _secure.getApiKey() ?? '');
+    if (!mounted) return;
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Gemini API-Key', style: TEXT_STYLE_SETTING),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: controller,
+              autofocus: true,
+              decoration: const InputDecoration(hintText: 'AIza…'),
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              'Aus Google AI Studio. Mit hinterlegter Zahlungsart (bezahlte '
+              'Stufe) nutzt Google deine Texte nicht zum Training — außerhalb '
+              'der EU gilt das sonst nicht.',
+              style: TEXT_STYLE_SETTINGS_DESCRIPTION,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Abbrechen'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, controller.text),
+            child: const Text('Speichern'),
+          ),
+        ],
+      ),
+    );
+    if (result == null) return;
+    await _secure.setApiKey(result);
+    if (mounted) setState(() {});
+  }
+
   Future<void> _prepareOnDeviceModels() async {
     setState(() => _preparingModels = true);
     try {
@@ -291,6 +341,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     !_storage.getDeleteAudioAfterTranscription(),
                   ),
                 ),
+                _toggleRow(
+                  'Analyse mit Gemini',
+                  'Gemini 3.8 Flash statt Gemma auf dem Handy. Nur der Text '
+                      'geht an Google, die Aufnahme bleibt hier. Ohne Netz '
+                      'analysiert Gemma.',
+                  _storage.getCloudAnalysis(),
+                  () => _toggleCloudAnalysis(!_storage.getCloudAnalysis()),
+                ),
+                if (_storage.getCloudAnalysis())
+                  FutureBuilder<String?>(
+                    future: _secure.getApiKey(),
+                    builder: (context, snap) => _navRow(
+                      'Gemini API-Key',
+                      trailing: (snap.data ?? '').isEmpty ? 'Fehlt' : 'Gesetzt',
+                      onTap: _editApiKey,
+                    ),
+                  ),
                 // Analysis runs on the phone (Whisper + Gemma); the first
                 // recording downloads both by itself (~3 GB), this just does
                 // it ahead of time, on Wi-Fi, with progress.

@@ -14,6 +14,9 @@ abstract class AnalysisEngine {
   /// engine produced a given result.
   String get modelName;
 
+  /// Written to [JournalEntry.analysisSource] — see AnalysisSource.
+  String get source;
+
   Future<AnalysisResult> analyzeAudio(List<File> audioFiles);
 
   /// Only the transcription step of [analyzeAudio] — so the transcript can

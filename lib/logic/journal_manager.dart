@@ -213,7 +213,8 @@ class JournalManager {
   }
 
   /// Writes an analysis result onto the entry *as stored now*, as the
-  /// phone's pre-analysis ([AnalysisSource.phone]) of [analyzedText].
+  /// analysis of [analyzedText] by whichever engine answered (on-device
+  /// pre-analysis or Gemini — see [AnalysisResult.source]).
   ///
   /// - A summary / tags edited by hand meanwhile (here or on the laptop) are
   ///   newer intent than an automatic result and stay ([JournalEntry.summaryByHand]).
@@ -238,9 +239,9 @@ class JournalManager {
         ..moodLabel = result.moodLabel
         ..moodScore = result.moodScore
         ..dimensions = result.dimensions
-        ..analysisModel = model
+        ..analysisModel = result.model ?? model
         ..analysisVersion = kAnalysisVersion
-        ..analysisSource = AnalysisSource.phone
+        ..analysisSource = result.source ?? AnalysisSource.phone
         ..analysisBasis = basis;
     }
     live

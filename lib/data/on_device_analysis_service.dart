@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:mars_log/data/analysis_engine.dart';
 import 'package:mars_log/data/local_llm.dart';
+import 'package:mars_log/domain/analysis_basis.dart';
 import 'package:mars_log/domain/journal_entry.dart';
 import 'package:whisper_ggml/whisper_ggml.dart';
 
@@ -32,6 +33,9 @@ class OnDeviceAnalysisEngine implements AnalysisEngine {
 
   @override
   String get modelName => kOnDeviceModelName;
+
+  @override
+  String get source => AnalysisSource.phone;
 
   static const _promptText = '''
 Du bist der Analyse-Assistent einer Sprach-Tagebuch-App. Unten steht das
@@ -121,6 +125,8 @@ Transkript:
               .where((t) => t.isNotEmpty)
               .toList() ??
           const [],
+      model: modelName,
+      source: source,
     );
   }
 

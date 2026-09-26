@@ -2,10 +2,9 @@ import 'dart:convert';
 import 'package:crypto/crypto.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
-/// Encrypted storage for sensitive values: the PIN hash.
+/// Encrypted storage for sensitive values: the Gemini API key (the cloud
+/// analysis option) and the PIN hash.
 class SecureStorageService {
-  /// Where the Gemini API key lived while analysis went to the cloud. Only
-  /// read to delete it — see [forgetLegacyApiKey].
   static const _keyApiKey = 'gemini_api_key';
   static const _keyPinHash = 'pin_hash';
 
@@ -16,13 +15,11 @@ class SecureStorageService {
           aOptions: AndroidOptions(encryptedSharedPreferences: true),
         );
 
-  /// Analysis runs on-device now; a key left over from the cloud days has
-  /// no use and shouldn't linger. Idempotent, best-effort.
-  Future<void> forgetLegacyApiKey() async {
-    try {
-      await _storage.delete(key: _keyApiKey);
-    } catch (_) {}
-  }
+  Future<String?> getApiKey() => _storage.read(key: _keyApiKey);
+
+  Future<void> setApiKey(String key) => key.trim().isEmpty
+      ? _storage.delete(key: _keyApiKey)
+      : _storage.write(key: _keyApiKey, value: key.trim());
 
   Future<bool> hasPin() async => (await _storage.read(key: _keyPinHash)) != null;
 
