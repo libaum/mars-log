@@ -472,6 +472,21 @@ class JournalRepository {
     return true;
   }
 
+  /// Adds only a title to an entry whose analysis is otherwise kept — one
+  /// from before titles existed (Gemini). Same conditions as
+  /// [writeAnalysis]: the entry as stored now, its transcript still the one
+  /// with [basis]; a title set by hand stays. The title is the analysis
+  /// item's, so that item's clock moves; its source and model don't.
+  Future<bool> writeTitle(String id, String title, {required String basis}) async {
+    final live = byId(id);
+    if (live == null || transcriptBasis(live.transcript) != basis) return false;
+    final trimmed = title.trim();
+    if (live.titleByHand || trimmed.isEmpty) return true;
+    live.title = trimmed;
+    await saveAnalysis(live, entryChanged: false);
+    return true;
+  }
+
   /// Stores an analysis the caller wrote onto [entry] — the stored object,
   /// re-read after any await, as for [upsert]. Stamps the analysis item's
   /// clock ([JournalEntry.analysisChangedAt]); the entry item's only if

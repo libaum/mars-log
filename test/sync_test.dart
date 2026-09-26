@@ -888,6 +888,47 @@ void main() {
       });
     });
 
+    test('a title added to a Gemini analysis keeps the rest of it', () async {
+      await phone.run((j, _) async {
+        await j.upsert(entry('a', transcript: 'alt')
+          ..summary = 'von Gemini'
+          ..analysisModel = 'gemini-3.7-flash');
+      });
+      await phone.sync(hub, key);
+      await laptop.sync(hub, key);
+      await tick();
+      await laptop.run((j, _) async {
+        expect(await j.writeTitle('a', 'Alter Tag', basis: transcriptBasis('alt')), isTrue);
+      });
+      await laptop.sync(hub, key);
+      await phone.sync(hub, key);
+      await phone.run((j, _) async {
+        final e = j.byId('a')!;
+        expect(e.title, 'Alter Tag');
+        expect(e.summary, 'von Gemini');
+        expect(e.analysisModel, 'gemini-3.7-flash');
+        expect(e.analysisSource, isNull);
+      });
+    });
+
+    test('a Gemini analysis survives its entry being edited after the upgrade', () async {
+      // On the phone since before the split: analysis inside, no own clock.
+      await phone.run((j, _) async {
+        await j.upsert(entry('a', transcript: 'alt')..summary = 'von Gemini');
+      });
+      await tick();
+      await phone.run((j, _) => j.setPlace(j.byId('a')!, 'Wien'));
+      await phone.sync(hub, key);
+
+      await laptop.sync(hub, key);
+      await laptop.run((j, _) async {
+        expect(j.byId('a')!.place, 'Wien');
+        expect(j.byId('a')!.summary, 'von Gemini', reason: 'lost with the old item');
+      });
+      expect(hub.row('a$kAnalysisItemSuffix')!.updatedAtMs,
+          entry('a').createdAt.millisecondsSinceEpoch);
+    });
+
     test('an item from before the split brings its analysis along', () async {
       final old = entry('a', transcript: 'alt')
         ..summary = 'von Gemini'

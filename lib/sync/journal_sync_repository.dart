@@ -41,7 +41,8 @@ class JournalSyncRepository implements SyncRepository {
       // show a spinner-forever entry on the laptop. It goes out once ready
       // or failed — that write stamps it anyway.
       if (entry.status == EntryStatus.analyzing) continue;
-      if (since == null || !entry.changedAt.isBefore(since)) {
+      final entryDue = since == null || !entry.changedAt.isBefore(since);
+      if (entryDue) {
         items.add(
           SyncItem(
             itemId: entry.id,
@@ -55,13 +56,27 @@ class JournalSyncRepository implements SyncRepository {
       // The analysis is its own item with its own clock — see
       // JournalEntry.analysisChangedAt.
       final analyzed = entry.analysisChangedAt;
-      if (analyzed != null && (since == null || !analyzed.isBefore(since))) {
+      final DateTime? stamp;
+      if (analyzed != null) {
+        stamp = (since == null || !analyzed.isBefore(since)) ? analyzed : null;
+      } else if (entryDue && _hasAnalysis(entry)) {
+        // An analysis from before the split (Gemini) has no clock of its own
+        // and would never go out as its own item — while the entry item
+        // above replaces the old combined one on the hub, taking it along.
+        // So it rides with every push of its entry, stamped with the entry's
+        // creation: older than any analysis written since, so it never
+        // displaces one.
+        stamp = entry.createdAt;
+      } else {
+        stamp = null;
+      }
+      if (stamp != null) {
         items.add(
           SyncItem(
             itemId: '${entry.id}$kAnalysisItemSuffix',
             moduleId: _moduleId,
             deviceId: _deviceId,
-            updatedAt: analyzed,
+            updatedAt: stamp,
             payload: entry.toAnalysisItemJson(),
           ),
         );
@@ -90,6 +105,9 @@ class JournalSyncRepository implements SyncRepository {
 
     return items;
   }
+
+  static bool _hasAnalysis(JournalEntry e) =>
+      (e.summary ?? '').isNotEmpty || e.moodScore != null || e.tags.isNotEmpty;
 
   @override
   Future<void> applyRemoteItems(List<SyncItem> items) async {
