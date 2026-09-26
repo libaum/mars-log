@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:mars_log/data/cloud_engine.dart';
 import 'package:mars_log/data/export_service.dart';
 import 'package:mars_log/data/journal_repository.dart';
 import 'package:mars_log/data/google_timeline_import_service.dart';
@@ -171,33 +172,77 @@ class _SettingsScreenState extends State<SettingsScreen> {
     setState(() {});
   }
 
-  Future<void> _toggleCloudAnalysis(bool on) async {
-    await _storage.setCloudAnalysis(on);
-    setState(() {});
-    if (on && ((await _secure.getApiKey()) ?? '').isEmpty) await _editApiKey();
+  AnalysisProvider get _provider =>
+      AnalysisProvider.byName(_storage.getAnalysisProvider());
+
+  static const _providerNotes = {
+    AnalysisProvider.device: 'Alles bleibt auf dem Handy. Schwächer.',
+    AnalysisProvider.gemini: 'Google. Nur der Text geht raus, die Aufnahme bleibt '
+        'hier. Bezahlte Stufe: kein Training mit deinen Texten.',
+    AnalysisProvider.mistral: 'Mistral (Paris), Daten in der EU. Nur der Text geht '
+        'raus. Im Mistral-Admin „Anonymous improvement data“ ausschalten.',
+  };
+
+  Future<void> _chooseProvider() async {
+    final chosen = await showDialog<AnalysisProvider>(
+      context: context,
+      builder: (context) => SimpleDialog(
+        title: const Text('Analyse', style: TEXT_STYLE_SETTING),
+        children: [
+          for (final p in AnalysisProvider.values)
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(context, p),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(p == _provider ? '● ${p.label}' : p.label, style: TEXT_STYLE_SETTING),
+                  const SizedBox(height: 2),
+                  Text(_providerNotes[p]!, style: TEXT_STYLE_SETTINGS_DESCRIPTION),
+                ],
+              ),
+            ),
+          const Padding(
+            padding: EdgeInsets.fromLTRB(24, 8, 24, 0),
+            child: Text(
+              'Transkribiert wird immer auf dem Handy (Whisper). Ohne Netz '
+              'analysiert Gemma.',
+              style: TEXT_STYLE_SETTINGS_DESCRIPTION,
+            ),
+          ),
+        ],
+      ),
+    );
+    if (chosen == null) return;
+    await _storage.setAnalysisProvider(chosen.name);
+    if (mounted) setState(() {});
+    if (chosen != AnalysisProvider.device &&
+        ((await _secure.getApiKey(chosen.name)) ?? '').isEmpty) {
+      await _editApiKey();
+    }
   }
 
   Future<void> _editApiKey() async {
-    final controller = TextEditingController(text: await _secure.getApiKey() ?? '');
+    final provider = _provider;
+    if (provider == AnalysisProvider.device) return;
+    final controller =
+        TextEditingController(text: await _secure.getApiKey(provider.name) ?? '');
     if (!mounted) return;
     final result = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Gemini API-Key', style: TEXT_STYLE_SETTING),
+        title: Text('${provider.label} API-Key', style: TEXT_STYLE_SETTING),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            TextField(
-              controller: controller,
-              autofocus: true,
-              decoration: const InputDecoration(hintText: 'AIza…'),
-            ),
+            TextField(controller: controller, autofocus: true),
             const SizedBox(height: 12),
-            const Text(
-              'Aus Google AI Studio. Mit hinterlegter Zahlungsart (bezahlte '
-              'Stufe) nutzt Google deine Texte nicht zum Training — außerhalb '
-              'der EU gilt das sonst nicht.',
+            Text(
+              provider == AnalysisProvider.gemini
+                  ? 'Aus Google AI Studio. Mit hinterlegter Zahlungsart nutzt '
+                      'Google deine Texte nicht zum Training — außerhalb der EU '
+                      'gilt das sonst nicht.'
+                  : 'Aus der Mistral-Konsole (console.mistral.ai → API Keys).',
               style: TEXT_STYLE_SETTINGS_DESCRIPTION,
             ),
           ],
@@ -215,7 +260,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
     );
     if (result == null) return;
-    await _secure.setApiKey(result);
+    await _secure.setApiKey(provider.name, result);
     if (mounted) setState(() {});
   }
 
@@ -341,19 +386,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     !_storage.getDeleteAudioAfterTranscription(),
                   ),
                 ),
-                _toggleRow(
-                  'Analyse mit Gemini',
-                  'Gemini 3.8 Flash statt Gemma auf dem Handy. Nur der Text '
-                      'geht an Google, die Aufnahme bleibt hier. Ohne Netz '
-                      'analysiert Gemma.',
-                  _storage.getCloudAnalysis(),
-                  () => _toggleCloudAnalysis(!_storage.getCloudAnalysis()),
+                _navRow(
+                  'Analyse',
+                  trailing: _provider.label,
+                  onTap: _chooseProvider,
                 ),
-                if (_storage.getCloudAnalysis())
+                if (_provider != AnalysisProvider.device)
                   FutureBuilder<String?>(
-                    future: _secure.getApiKey(),
+                    future: _secure.getApiKey(_provider.name),
                     builder: (context, snap) => _navRow(
-                      'Gemini API-Key',
+                      '${_provider.label} API-Key',
                       trailing: (snap.data ?? '').isEmpty ? 'Fehlt' : 'Gesetzt',
                       onTap: _editApiKey,
                     ),

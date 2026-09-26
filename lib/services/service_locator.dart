@@ -1,7 +1,7 @@
 import 'package:get_it/get_it.dart';
 import 'package:mars_log/data/analysis_engine.dart';
 import 'package:mars_log/data/export_service.dart';
-import 'package:mars_log/data/gemini_engine.dart';
+import 'package:mars_log/data/cloud_engine.dart';
 import 'package:mars_log/data/journal_repository.dart';
 import 'package:mars_log/data/local_storage_service.dart';
 import 'package:mars_log/data/on_device_analysis_service.dart';
@@ -56,8 +56,17 @@ Future<void> setupServiceLocator() async {
   final storage = getIt<LocalStorageService>();
   getIt.registerSingleton<AnalysisEngine>(SelectedAnalysisEngine(
     onDevice: onDevice,
-    cloud: GeminiTextEngine(transcriber: onDevice, apiKey: secure.getApiKey),
-    useCloud: storage.getCloudAnalysis,
+    cloud: {
+      AnalysisProvider.gemini: GeminiTextEngine(
+        transcriber: onDevice,
+        apiKey: () => secure.getApiKey(AnalysisProvider.gemini.name),
+      ),
+      AnalysisProvider.mistral: MistralTextEngine(
+        transcriber: onDevice,
+        apiKey: () => secure.getApiKey(AnalysisProvider.mistral.name),
+      ),
+    },
+    provider: () => AnalysisProvider.byName(storage.getAnalysisProvider()),
   ));
 
   getIt.registerSingleton<ThemeManager>(ThemeManager());
