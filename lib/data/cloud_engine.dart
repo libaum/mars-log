@@ -326,7 +326,7 @@ class MistralTextEngine extends CloudTextEngine {
       : super(endpoint: endpoint ?? Uri.parse('https://api.mistral.ai/v1/chat/completions'));
 
   @override
-  String get model => 'mistral-large-3-25-12';
+  String get model => 'mistral-large-2512';
 
   @override
   String get provider => 'Mistral';

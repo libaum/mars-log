@@ -127,11 +127,11 @@ void main() {
       endpoint: fake.uri('/v1/chat/completions'),
     );
 
-    expectAnswer(await engine.analyzeText('Heute am See.'), 'mistral-large-3-25-12');
+    expectAnswer(await engine.analyzeText('Heute am See.'), 'mistral-large-2512');
 
     final req = fake.requests.single;
     expect(req.headers['authorization'], 'Bearer mistral-test');
-    expect(req.body['model'], 'mistral-large-3-25-12');
+    expect(req.body['model'], 'mistral-large-2512');
     expect(req.body['messages'][0]['content'], endsWith('Heute am See.'));
     final format = req.body['response_format'] as Map<String, dynamic>;
     expect(format['type'], 'json_schema');
