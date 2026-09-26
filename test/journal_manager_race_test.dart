@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mars_log/data/analysis_engine.dart';
 import 'package:mars_log/data/journal_repository.dart';
 import 'package:mars_log/data/local_storage_service.dart';
+import 'package:mars_log/domain/analysis_basis.dart';
 import 'package:mars_log/domain/journal_entry.dart';
 import 'package:mars_log/logic/analysis_task_service.dart';
 import 'package:mars_log/logic/journal_manager.dart';
@@ -269,6 +270,29 @@ void main() {
       expect(journal.byId('a')!.status, EntryStatus.ready);
       expect(journal.byId('a')!.summary, 'später');
       expect(transcriptions, 1, reason: 'Whisper ran again for a kept transcript');
+    });
+  });
+
+  test("the phone's re-analysis keeps the laptop's analysis of the same transcript",
+      () async {
+    await phone.run((journal, storage) async {
+      await phone.audio('a.wav').create(recursive: true);
+      await journal.upsert(entry('a', transcript: 'alt', audio: ['a.wav']));
+      await journal.writeAnalysis(
+        'a',
+        _result(summary: 'vom Laptop'),
+        model: 'ollama:test',
+        version: 1,
+        source: AnalysisSource.laptop,
+        basis: transcriptBasis('alt'),
+      );
+      final engine = _Engine((_) => _result(summary: 'vom Handy'))..gate.complete();
+      await _manager(journal, storage, engine).reanalyze(journal.byId('a')!);
+
+      final e = journal.byId('a')!;
+      expect(e.summary, 'vom Laptop');
+      expect(e.analysisSource, AnalysisSource.laptop);
+      expect(e.status, EntryStatus.ready);
     });
   });
 

@@ -41,32 +41,51 @@ class JournalSyncRepository implements SyncRepository {
       // show a spinner-forever entry on the laptop. It goes out once ready
       // or failed — that write stamps it anyway.
       if (entry.status == EntryStatus.analyzing) continue;
-      if (since != null && entry.changedAt.isBefore(since)) continue;
-      items.add(
-        SyncItem(
-          itemId: entry.id,
-          moduleId: _moduleId,
-          deviceId: _deviceId,
-          updatedAt: entry.changedAt,
-          payload: entry.toJson(),
-        ),
-      );
+      if (since == null || !entry.changedAt.isBefore(since)) {
+        items.add(
+          SyncItem(
+            itemId: entry.id,
+            moduleId: _moduleId,
+            deviceId: _deviceId,
+            updatedAt: entry.changedAt,
+            payload: entry.toEntryItemJson(),
+          ),
+        );
+      }
+      // The analysis is its own item with its own clock — see
+      // JournalEntry.analysisChangedAt.
+      final analyzed = entry.analysisChangedAt;
+      if (analyzed != null && (since == null || !analyzed.isBefore(since))) {
+        items.add(
+          SyncItem(
+            itemId: '${entry.id}$kAnalysisItemSuffix',
+            moduleId: _moduleId,
+            deviceId: _deviceId,
+            updatedAt: analyzed,
+            payload: entry.toAnalysisItemJson(),
+          ),
+        );
+      }
     }
 
     for (final MapEntry(key: id, value: mark) in _storage.getSyncPurged().entries) {
       // Filtered by when it was recorded, but competing with its stamp —
       // see PurgeMark.
       if (since != null && mark.recorded.isBefore(since)) continue;
-      items.add(
-        SyncItem(
-          itemId: id,
-          moduleId: _moduleId,
-          deviceId: _deviceId,
-          updatedAt: mark.stamp,
-          deletedAt: mark.stamp,
-          payload: const {},
-        ),
-      );
+      // Both items go: the entry's and its analysis'. The analysis tombstone
+      // only clears the hub's copy; devices drop the analysis with the entry.
+      for (final itemId in [id, '$id$kAnalysisItemSuffix']) {
+        items.add(
+          SyncItem(
+            itemId: itemId,
+            moduleId: _moduleId,
+            deviceId: _deviceId,
+            updatedAt: mark.stamp,
+            deletedAt: mark.stamp,
+            payload: const {},
+          ),
+        );
+      }
     }
 
     return items;
@@ -76,14 +95,24 @@ class JournalSyncRepository implements SyncRepository {
   Future<void> applyRemoteItems(List<SyncItem> items) async {
     final upserts = <JournalEntry>[];
     final removed = <String, DateTime>{};
+    final analyses = <SyncedAnalysis>[];
     for (final item in items) {
+      final isAnalysis = item.itemId.endsWith(kAnalysisItemSuffix);
       if (item.isDeleted) {
-        removed[item.itemId] = item.updatedAt;
+        // An analysis tombstone always comes with its entry's; that one
+        // removes both here.
+        if (!isAnalysis) removed[item.itemId] = item.updatedAt;
         continue;
       }
       // The envelope's id is authenticated (AAD); the payload's id must agree
       // or the payload is not what the hub claims it is.
       if (item.payload['id'] != item.itemId) continue;
+      if (isAnalysis) {
+        final entryId = item.itemId
+            .substring(0, item.itemId.length - kAnalysisItemSuffix.length);
+        analyses.add(SyncedAnalysis(entryId, item.updatedAt, item.payload));
+        continue;
+      }
       final JournalEntry entry;
       try {
         entry = JournalEntry.fromJson(item.payload);
@@ -96,8 +125,17 @@ class JournalSyncRepository implements SyncRepository {
       }
       entry.changedAt = item.updatedAt;
       upserts.add(entry);
+      // Written before the analysis became its own item: the analysis rides
+      // inside. Split it off, with the item's stamp as its clock.
+      if (!item.payload.containsKey('v')) {
+        analyses.add(SyncedAnalysis(entry.id, item.updatedAt, {
+          ...entry.toAnalysisItemJson(),
+          'analysisSource': null,
+          'analysisBasis': null,
+        }));
+      }
     }
-    await _journal.applySynced(upserts, removed);
+    await _journal.applySynced(upserts, removed, analyses: analyses);
   }
 
   @override

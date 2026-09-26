@@ -22,6 +22,7 @@ const _allowed = [
   'package:path_provider/',
   'package:shared_preferences/',
   'package:mars_sync/',
+  'package:crypto/', // pure Dart (transcriptBasis)
   'package:mars_log/domain/',
   'package:mars_log/data/journal_repository.dart',
   'package:mars_log/data/local_storage_service.dart',

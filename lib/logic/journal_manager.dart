@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:mars_log/data/analysis_engine.dart';
 import 'package:mars_log/data/journal_repository.dart';
 import 'package:mars_log/data/local_storage_service.dart';
+import 'package:mars_log/domain/analysis_basis.dart';
 import 'package:mars_log/domain/journal_entry.dart';
 import 'package:mars_log/logic/analysis_task_service.dart';
 import 'package:mars_log/logic/location_service.dart';
@@ -138,10 +139,9 @@ class JournalManager {
         await _repo.upsert(live);
         if (dropSnippet) await _repo.deleteAudioFile(rec.fileName);
 
-        final before = _snapshot(live);
-        final result = await engine.analyzeText(before.transcript!);
-        await _applyResult(id, before, result, engine.modelName,
-            withTranscript: false);
+        final text = live.transcript!;
+        final result = await engine.analyzeText(text);
+        await _applyResult(id, result, engine.modelName, analyzedText: text);
       });
     } catch (e) {
       await _markFailed(id, e);
@@ -175,9 +175,8 @@ class JournalManager {
   }) async {
     final start = _repo.byId(id);
     if (start == null) return;
-    // The baseline for [_applyResult]'s field guard: what the entry held when
-    // the analysis started. Deliberately not refreshed below — an edit made
-    // meanwhile must keep counting as newer intent.
+    // What the entry held when the analysis started: whether Whisper's
+    // transcript may replace the stored one (not if corrected meanwhile).
     final before = _snapshot(start);
     _inFlight.add(id);
     try {
@@ -203,8 +202,7 @@ class JournalManager {
           text = _repo.byId(id)?.transcript ?? transcript;
         }
         final result = await engine.analyzeText(text);
-        await _applyResult(id, before, result, engine.modelName,
-            withTranscript: false);
+        await _applyResult(id, result, engine.modelName, analyzedText: text);
       });
     } catch (e) {
       await _markFailed(id, e);
@@ -214,40 +212,46 @@ class JournalManager {
     _refresh();
   }
 
-  /// Writes an analysis result onto the entry *as stored now*. Field by
-  /// field, a value is only written if the field still holds what it held in
-  /// [before] — when the analysis started. A correction made by hand in the
-  /// meantime (here or on the laptop) is newer intent than an automatic
-  /// result and stays. Status and model metadata are the analysis' own and
-  /// always written.
+  /// Writes an analysis result onto the entry *as stored now*, as the
+  /// phone's pre-analysis ([AnalysisSource.phone]) of [analyzedText].
+  ///
+  /// - A summary / tags edited by hand meanwhile (here or on the laptop) are
+  ///   newer intent than an automatic result and stay ([JournalEntry.summaryByHand]).
+  /// - If the laptop's analysis of exactly this transcript arrived meanwhile,
+  ///   it is the better one and stays; only the entry's status moves on.
   Future<void> _applyResult(
     String id,
-    JournalEntry before,
     AnalysisResult result,
     String model, {
-    required bool withTranscript,
+    required String analyzedText,
   }) async {
     final live = _repo.byId(id);
     if (live == null) return; // purged meanwhile: nothing left to annotate
-    void put<T>(T Function(JournalEntry e) field, void Function(T v) write, T value) {
-      if (_same(field(live), field(before))) write(value);
+    final basis = transcriptBasis(analyzedText);
+    final laptopHasIt =
+        live.analysisSource == AnalysisSource.laptop && live.analysisBasis == basis;
+    if (!laptopHasIt) {
+      if (!live.summaryByHand) live.summary = result.summary;
+      if (!live.tagsByHand) live.tags = result.tags;
+      live
+        ..moodLabel = result.moodLabel
+        ..moodScore = result.moodScore
+        ..dimensions = result.dimensions
+        ..analysisModel = model
+        ..analysisVersion = kAnalysisVersion
+        ..analysisSource = AnalysisSource.phone
+        ..analysisBasis = basis;
     }
-
-    if (withTranscript) {
-      put<String?>((e) => e.transcript, (v) => live.transcript = v, result.transcript);
-    }
-    put<String?>((e) => e.summary, (v) => live.summary = v, result.summary);
-    put<String?>((e) => e.moodLabel, (v) => live.moodLabel = v, result.moodLabel);
-    put<double?>((e) => e.moodScore, (v) => live.moodScore = v, result.moodScore);
-    put<Map<String, int>?>((e) => e.dimensions, (v) => live.dimensions = v, result.dimensions);
-    put<List<String>>((e) => e.tags, (v) => live.tags = v, result.tags);
     live
-      ..analysisModel = model
-      ..analysisVersion = kAnalysisVersion
       ..errorMessage = null
       ..status = EntryStatus.ready;
     final discard = _takeAudioIfDiscarding(live);
-    await _repo.upsert(live);
+    // Status is the entry item's, the result the analysis item's: both clocks.
+    if (laptopHasIt) {
+      await _repo.upsert(live);
+    } else {
+      await _repo.saveAnalysis(live, entryChanged: true);
+    }
     // Files go after the write: no await between re-reading [live] and
     // writing it. A crash in between leaves orphans the startup sweep removes.
     for (final f in discard) {

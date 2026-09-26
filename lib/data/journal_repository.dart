@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:mars_log/domain/analysis_basis.dart';
 import 'package:mars_log/domain/journal_entry.dart';
 
 /// Where purges leave a trace, so the sync layer can still tell other devices
@@ -412,15 +413,72 @@ class JournalRepository {
     final live = _live(entry);
     if (live == null) return;
     if (transcript != null) live.transcript = transcript;
-    if (summary != null) live.summary = summary;
+    if (summary != null) {
+      live.summary = summary;
+      // The human's now: travels with the entry, no analysis overwrites it.
+      live.summaryByHand = true;
+    }
     if (place != null) {
       final trimmed = place.trim();
       live.place = trimmed.isEmpty ? null : trimmed;
     }
     if (tags != null) {
       live.tags = tags.map((t) => t.trim()).where((t) => t.isNotEmpty).toList();
+      live.tagsByHand = true;
     }
     await upsert(live);
+  }
+
+  /// Writes [result] as the analysis of the transcript with [basis] — the
+  /// laptop's way in (the phone goes through JournalManager). Only onto the
+  /// entry as stored now, and only if its transcript is still the one that
+  /// was analysed; returns false otherwise (gone, or corrected meanwhile —
+  /// the caller analyses again). Summary / tags edited by hand stay.
+  Future<bool> writeAnalysis(
+    String id,
+    AnalysisResult result, {
+    required String model,
+    required int version,
+    required String source,
+    required String basis,
+  }) async {
+    final live = byId(id);
+    if (live == null || transcriptBasis(live.transcript) != basis) return false;
+    if (!live.summaryByHand) live.summary = result.summary;
+    if (!live.tagsByHand) live.tags = result.tags;
+    live
+      ..moodLabel = result.moodLabel
+      ..moodScore = result.moodScore
+      ..dimensions = result.dimensions
+      ..analysisModel = model
+      ..analysisVersion = version
+      ..analysisSource = source
+      ..analysisBasis = basis;
+    // Failed where it was recorded, analysed here: fine here. Local only —
+    // status is the entry item's.
+    if (live.status == EntryStatus.failed) {
+      live
+        ..status = EntryStatus.ready
+        ..errorMessage = null;
+    }
+    await saveAnalysis(live, entryChanged: false);
+    return true;
+  }
+
+  /// Stores an analysis the caller wrote onto [entry] — the stored object,
+  /// re-read after any await, as for [upsert]. Stamps the analysis item's
+  /// clock ([JournalEntry.analysisChangedAt]); the entry item's only if
+  /// [entryChanged] (the phone also flips `status`, which is the entry's).
+  Future<void> saveAnalysis(JournalEntry entry, {required bool entryChanged}) async {
+    final i = _entries.indexWhere((e) => e.id == entry.id);
+    assert(
+      i >= 0 && identical(_entries[i], entry),
+      'saveAnalysis() needs the stored JournalEntry ${entry.id}',
+    );
+    if (i < 0) return;
+    entry.analysisChangedAt = DateTime.now();
+    if (entryChanged) _stamp(entry);
+    await _persist();
   }
 
   /// Writes the outcome of a sync round: [upserts] replace or add entries by
@@ -435,8 +493,9 @@ class JournalRepository {
   /// Audio is never carried by sync, only its metadata — see [_mergeAudio].
   Future<void> applySynced(
     List<JournalEntry> upserts,
-    Map<String, DateTime> removed,
-  ) async {
+    Map<String, DateTime> removed, {
+    List<SyncedAnalysis> analyses = const [],
+  }) async {
     var changed = false;
 
     for (final incoming in upserts) {
@@ -447,13 +506,40 @@ class JournalRepository {
         // Our own push coming back: same stamp, same content. Rewriting it
         // would only churn the file and repaint the UI.
         if (local.changedAt.isAtSameMomentAs(incoming.changedAt) &&
-            jsonEncode(local.toJson()) == jsonEncode(incoming.toJson())) {
+            jsonEncode(local.toEntryItemJson()) ==
+                jsonEncode(incoming.toEntryItemJson())) {
           continue;
         }
         _mergeAudio(local, incoming);
+        _keepAnalysis(local, incoming);
         _entries[i] = incoming;
       } else {
         _entries.add(incoming);
+      }
+      changed = true;
+    }
+
+    // After the entries: an analysis item may arrive in the same round as
+    // the entry it belongs to.
+    for (final a in analyses) {
+      final e = byId(a.entryId);
+      if (e == null) continue; // purged here — nothing to annotate
+      final local = e.analysisChangedAt;
+      if (local != null && local.isAfter(a.changedAt)) continue;
+      if (local != null &&
+          local.isAtSameMomentAs(a.changedAt) &&
+          jsonEncode(e.toAnalysisItemJson()) == jsonEncode(a.json)) {
+        continue;
+      }
+      e
+        ..takeAnalysisFrom(a.json)
+        ..analysisChangedAt = a.changedAt;
+      // An entry whose own analysis failed has one now. Local only: status is
+      // the entry item's, and the device that failed pushes its own state.
+      if (e.status == EntryStatus.failed) {
+        e
+          ..status = EntryStatus.ready
+          ..errorMessage = null;
       }
       changed = true;
     }
@@ -473,6 +559,40 @@ class JournalRepository {
     await _persist();
     for (final e in purged) {
       await _deleteAudio(e);
+    }
+  }
+
+  /// An incoming entry item carries no analysis ([JournalEntry.toEntryItemJson])
+  /// — that is its own item with its own clock. Keep the analysis this device
+  /// holds; a summary / tags edited by hand come with the entry and win.
+  ///
+  /// An item from before the split does carry an analysis; it is kept here
+  /// too, and [applySynced] then applies the one [JournalSyncRepository]
+  /// split off it by the analysis clock like any other.
+  void _keepAnalysis(JournalEntry local, JournalEntry incoming) {
+    final summary = incoming.summary;
+    final tags = incoming.tags;
+    incoming
+      ..summary = local.summary
+      ..moodLabel = local.moodLabel
+      ..moodScore = local.moodScore
+      ..dimensions = local.dimensions
+      ..tags = local.tags
+      ..analysisModel = local.analysisModel
+      ..analysisVersion = local.analysisVersion
+      ..analysisChangedAt = local.analysisChangedAt
+      ..analysisSource = local.analysisSource
+      ..analysisBasis = local.analysisBasis;
+    if (incoming.summaryByHand) incoming.summary = summary;
+    if (incoming.tagsByHand) incoming.tags = tags;
+    // The sending device's analysis failed, but this one holds an analysis of
+    // exactly this transcript (e.g. the laptop's) — the entry is fine here.
+    if (incoming.status == EntryStatus.failed &&
+        incoming.analysisBasis != null &&
+        incoming.analysisBasis == transcriptBasis(incoming.transcript)) {
+      incoming
+        ..status = EntryStatus.ready
+        ..errorMessage = null;
     }
   }
 
@@ -504,4 +624,12 @@ class JournalRepository {
   }
 
   File get indexFile => File(_indexPath);
+}
+
+/// An analysis item as it arrived from the hub — see [JournalEntry.toAnalysisItemJson].
+class SyncedAnalysis {
+  final String entryId;
+  final DateTime changedAt;
+  final Map<String, dynamic> json;
+  const SyncedAnalysis(this.entryId, this.changedAt, this.json);
 }

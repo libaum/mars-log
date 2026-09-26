@@ -5,6 +5,7 @@ import 'dart:math';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mars_log/data/journal_repository.dart';
 import 'package:mars_log/data/local_storage_service.dart';
+import 'package:mars_log/domain/analysis_basis.dart';
 import 'package:mars_log/domain/journal_entry.dart';
 import 'package:mars_log/sync/journal_sync_repository.dart';
 import 'package:mars_log/sync/sync_purge_trace.dart';
@@ -781,6 +782,147 @@ void main() {
       expect(phone.audio('keep.wav').existsSync(), isTrue);
     });
   });
+  group('analysis as its own item', () {
+    /// What the laptop's analyzer does: write an analysis onto the stored
+    /// entry, without touching the entry item's clock.
+    Future<void> laptopAnalyzes(JournalRepository j, String id, String summary) async {
+      final ok = await j.writeAnalysis(
+        id,
+        AnalysisResult(
+          transcript: j.byId(id)!.transcript!,
+          summary: summary,
+          moodLabel: 'gut',
+          moodScore: 8,
+          dimensions: const {'calm': 70},
+          tags: ['vom Laptop'],
+        ),
+        model: 'ollama:test',
+        version: 1,
+        source: AnalysisSource.laptop,
+        basis: transcriptBasis(j.byId(id)!.transcript),
+      );
+      expect(ok, isTrue);
+    }
+
+    test('the laptop replaces the pre-analysis, and a phone edit made meanwhile stays',
+        () async {
+      await phone.run((j, _) async {
+        final e = entry('a', transcript: 'heute')
+          ..summary = 'vom Handy'
+          ..analysisSource = AnalysisSource.phone;
+        await j.upsert(e);
+        await j.saveAnalysis(j.byId('a')!, entryChanged: false);
+      });
+      await phone.sync(hub, key);
+      await laptop.sync(hub, key);
+
+      await tick();
+      await laptop.run((j, _) => laptopAnalyzes(j, 'a', 'vom Laptop'));
+      await tick();
+      // Edited on the phone *after* the laptop's analysis, before any sync:
+      // under one item per entry, one of the two would be lost.
+      await phone.run((j, _) => j.setPlace(j.byId('a')!, 'Wien'));
+
+      await laptop.sync(hub, key);
+      await phone.sync(hub, key);
+      await laptop.sync(hub, key);
+
+      for (final d in [phone, laptop]) {
+        await d.run((j, _) async {
+          final e = j.byId('a')!;
+          expect(e.place, 'Wien', reason: '${d.id}: phone edit lost');
+          expect(e.summary, 'vom Laptop', reason: '${d.id}: laptop analysis lost');
+          expect(e.analysisSource, AnalysisSource.laptop);
+        });
+      }
+    });
+
+    test('a summary edited by hand survives a later analysis', () async {
+      await phone.run((j, _) => j.upsert(entry('a', transcript: 'heute')));
+      await phone.sync(hub, key);
+      await laptop.sync(hub, key);
+
+      await tick();
+      await phone.run((j, _) => j.edit(j.byId('a')!, summary: 'meine Worte', tags: ['eigen']));
+      await phone.sync(hub, key);
+      await laptop.sync(hub, key);
+      await tick();
+      await laptop.run((j, _) => laptopAnalyzes(j, 'a', 'vom Laptop'));
+      await laptop.sync(hub, key);
+      await phone.sync(hub, key);
+
+      for (final d in [phone, laptop]) {
+        await d.run((j, _) async {
+          final e = j.byId('a')!;
+          expect(e.summary, 'meine Worte', reason: d.id);
+          expect(e.tags, ['eigen'], reason: d.id);
+          expect(e.moodScore, 8, reason: '${d.id}: the rest of the analysis applies');
+        });
+      }
+    });
+
+    test('an item from before the split brings its analysis along', () async {
+      final old = entry('a', transcript: 'alt')
+        ..summary = 'von Gemini'
+        ..moodScore = 6;
+      final item = SyncItem(
+        itemId: 'a',
+        moduleId: 'mars_log',
+        deviceId: 'old-phone',
+        updatedAt: old.changedAt,
+        payload: old.toJson(), // the old format: no 'v', analysis inside
+      );
+      hub.push('old-phone', [
+        item.copyWith(payload: {'ciphertext': await key.encrypt(item.payload, aad: item.aad)}),
+      ]);
+
+      await laptop.sync(hub, key);
+      await laptop.run((j, _) async {
+        final e = j.byId('a')!;
+        expect(e.summary, 'von Gemini');
+        expect(e.moodScore, 6);
+        expect(e.analysisChangedAt, old.changedAt);
+        expect(e.analysisSource, isNull, reason: 'unknown source — the laptop redoes it');
+      });
+    });
+
+    test('a purge removes both items, and the entry everywhere', () async {
+      await phone.run((j, _) async {
+        await j.upsert(entry('a', transcript: 'x')..summary = 's');
+        await j.saveAnalysis(j.byId('a')!, entryChanged: false);
+      });
+      await phone.sync(hub, key);
+      await laptop.sync(hub, key);
+      await tick();
+      await phone.run((j, _) async {
+        await j.moveToTrash(j.byId('a')!);
+        await j.purge(j.byId('a')!);
+      });
+      await phone.sync(hub, key);
+      await laptop.sync(hub, key);
+
+      expect(hub.row('a')!.isDeleted, isTrue);
+      expect(hub.row('a$kAnalysisItemSuffix')!.isDeleted, isTrue);
+      await laptop.run((j, _) async => expect(j.byId('a'), isNull));
+    });
+
+    test('an entry whose phone analysis failed is fine where an analysis exists', () async {
+      await phone.run((j, _) => j.upsert(entry('a', transcript: 'x', status: EntryStatus.failed)
+        ..errorMessage = 'Modell fehlt'));
+      await phone.sync(hub, key);
+      await laptop.sync(hub, key);
+      await tick();
+      await laptop.run((j, _) => laptopAnalyzes(j, 'a', 'vom Laptop'));
+      await laptop.sync(hub, key);
+      await phone.sync(hub, key);
+      await phone.run((j, _) async {
+        expect(j.byId('a')!.status, EntryStatus.ready);
+        expect(j.byId('a')!.summary, 'vom Laptop');
+      });
+      await laptop.run((j, _) async => expect(j.byId('a')!.status, EntryStatus.ready));
+    });
+  });
+
 }
 
 /// Watches the journal's temp-file writes: how many, and how many at once

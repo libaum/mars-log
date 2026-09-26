@@ -51,6 +51,34 @@ class JournalEntry {
   int? analysisVersion;
   String? errorMessage;
 
+  // ── The analysis as a sync item of its own ────────────────────────────────
+  //
+  // The phone makes a quick pre-analysis, the laptop a better one that
+  // replaces it. Both would otherwise write the same sync item as the human
+  // edits (transcript, place, trash …), and last-write-wins would let an
+  // analysis silently undo an edit made meanwhile on the other device. So
+  // the analysis-owned fields — summary, moodLabel, moodScore, dimensions,
+  // tags, analysisModel/Version and the three below — sync as a second item
+  // (`<id>:analysis`, see JournalSyncRepository) with its own clock.
+  //
+  // A summary or tags edited by hand are the human's: [summaryByHand] /
+  // [tagsByHand] move them into the entry item, and no analysis overwrites
+  // them afterwards.
+
+  /// The analysis item's last-write-wins clock. Null: no analysis yet, or one
+  /// from before the split that never synced as its own item.
+  DateTime? analysisChangedAt;
+
+  /// [AnalysisSource.phone] or [AnalysisSource.laptop]; null for analyses
+  /// from before the split (Gemini API, first on-device builds).
+  String? analysisSource;
+
+  /// [transcriptBasis] of the transcript the analysis was made from.
+  String? analysisBasis;
+
+  bool summaryByHand;
+  bool tagsByHand;
+
   /// True once the audio file has been discarded after transcription. The entry
   /// then lives on the transcript alone; playback is unavailable.
   bool audioDeleted;
@@ -82,6 +110,11 @@ class JournalEntry {
     this.analysisModel,
     this.analysisVersion,
     this.errorMessage,
+    this.analysisChangedAt,
+    this.analysisSource,
+    this.analysisBasis,
+    this.summaryByHand = false,
+    this.tagsByHand = false,
     this.deletedAt,
     this.audioDeleted = false,
     this.latitude,
@@ -108,12 +141,65 @@ class JournalEntry {
         'analysisModel': analysisModel,
         'analysisVersion': analysisVersion,
         'errorMessage': errorMessage,
+        'analysisChangedAt': analysisChangedAt?.toIso8601String(),
+        'analysisSource': analysisSource,
+        'analysisBasis': analysisBasis,
+        'summaryByHand': summaryByHand,
+        'tagsByHand': tagsByHand,
         'deletedAt': deletedAt?.toIso8601String(),
         'audioDeleted': audioDeleted,
         'latitude': latitude,
         'longitude': longitude,
         'place': place,
       };
+
+  /// The entry sync item: everything but the analysis ([kAnalysisKeys]) —
+  /// except a summary / tags edited by hand, which are the human's.
+  /// `v: 2` tells it apart from items written before the split, which carried
+  /// the analysis inside.
+  Map<String, dynamic> toEntryItemJson() {
+    final json = toJson()..removeWhere((k, _) => kAnalysisKeys.contains(k));
+    if (summaryByHand) json['summary'] = summary;
+    if (tagsByHand) json['tags'] = tags;
+    return json..['v'] = 2;
+  }
+
+  /// The analysis sync item (`<id>:analysis`). Summary / tags edited by hand
+  /// are left out: they travel with the entry item.
+  Map<String, dynamic> toAnalysisItemJson() => {
+        'id': '$id$kAnalysisItemSuffix',
+        if (!summaryByHand) 'summary': summary,
+        'moodLabel': moodLabel,
+        'moodScore': moodScore,
+        'dimensions': dimensions,
+        if (!tagsByHand) 'tags': tags,
+        'analysisModel': analysisModel,
+        'analysisVersion': analysisVersion,
+        'analysisSource': analysisSource,
+        'analysisBasis': analysisBasis,
+      };
+
+  /// Writes the analysis fields of an analysis item's [json] (see
+  /// [toAnalysisItemJson]) onto this entry. Summary / tags edited by hand
+  /// stay. Returns nothing to stamp — the caller owns the clock.
+  void takeAnalysisFrom(Map<String, dynamic> json) {
+    if (!summaryByHand && json.containsKey('summary')) {
+      summary = json['summary'] as String?;
+    }
+    if (!tagsByHand && json.containsKey('tags')) {
+      tags = (json['tags'] as List<dynamic>?)?.cast<String>() ?? const [];
+    }
+    final dims = json['dimensions'];
+    moodLabel = json['moodLabel'] as String?;
+    moodScore = (json['moodScore'] as num?)?.toDouble();
+    dimensions = dims == null
+        ? null
+        : (dims as Map<String, dynamic>).map((k, v) => MapEntry(k, (v as num).toInt()));
+    analysisModel = json['analysisModel'] as String?;
+    analysisVersion = json['analysisVersion'] as int?;
+    analysisSource = json['analysisSource'] as String?;
+    analysisBasis = json['analysisBasis'] as String?;
+  }
 
   factory JournalEntry.fromJson(Map<String, dynamic> json) {
     final dims = json['dimensions'];
@@ -145,6 +231,13 @@ class JournalEntry {
       analysisModel: json['analysisModel'] as String?,
       analysisVersion: json['analysisVersion'] as int?,
       errorMessage: json['errorMessage'] as String?,
+      analysisChangedAt: json['analysisChangedAt'] == null
+          ? null
+          : DateTime.parse(json['analysisChangedAt'] as String),
+      analysisSource: json['analysisSource'] as String?,
+      analysisBasis: json['analysisBasis'] as String?,
+      summaryByHand: json['summaryByHand'] as bool? ?? false,
+      tagsByHand: json['tagsByHand'] as bool? ?? false,
       deletedAt: json['deletedAt'] == null
           ? null
           : DateTime.parse(json['deletedAt'] as String),
@@ -155,6 +248,24 @@ class JournalEntry {
     );
   }
 }
+
+/// Item-id suffix of an entry's analysis sync item.
+const kAnalysisItemSuffix = ':analysis';
+
+/// The keys of [JournalEntry.toJson] that belong to the analysis item —
+/// summary and tags only while not edited by hand.
+const kAnalysisKeys = <String>{
+  'summary',
+  'moodLabel',
+  'moodScore',
+  'dimensions',
+  'tags',
+  'analysisModel',
+  'analysisVersion',
+  'analysisChangedAt',
+  'analysisSource',
+  'analysisBasis',
+};
 
 /// Result of an analysis pass — the recomputable interpretation of one entry.
 class AnalysisResult {
