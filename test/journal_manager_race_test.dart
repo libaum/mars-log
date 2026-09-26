@@ -116,7 +116,9 @@ void main() {
     await phone.run((journal, storage) async {
       final engine = _Engine((_) => _result());
       final manager = _manager(journal, storage, engine);
-      final analysis = manager.reanalyze(journal.byId('a')!);
+      // The long way round (Whisper first) — the window in which the laptop
+      // edits.
+      final analysis = manager.reanalyze(journal.byId('a')!, retranscribe: true);
       await _settle();
       expect(journal.byId('a')!.status, EntryStatus.analyzing);
 
@@ -293,6 +295,57 @@ void main() {
       expect(e.summary, 'vom Laptop');
       expect(e.analysisSource, AnalysisSource.laptop);
       expect(e.status, EntryStatus.ready);
+    });
+  });
+
+  test('"Neu analysieren" works from the transcript, without Whisper', () async {
+    await phone.run((journal, storage) async {
+      await phone.audio('a.wav').create(recursive: true);
+      await journal.upsert(entry('a', transcript: 'schon da', audio: ['a.wav']));
+      var transcriptions = 0;
+      final engine = _Engine((text) {
+        if (text == null) transcriptions++;
+        return _result(transcript: text ?? 'neu gehört', summary: 'Analyse');
+      })..gate.complete();
+      final manager = _manager(journal, storage, engine);
+
+      await manager.reanalyze(journal.byId('a')!);
+      expect(transcriptions, 0);
+      expect(journal.byId('a')!.transcript, 'schon da');
+      expect(journal.byId('a')!.summary, 'Analyse');
+
+      await manager.reanalyze(journal.byId('a')!, retranscribe: true);
+      expect(transcriptions, 1);
+      expect(journal.byId('a')!.transcript, 'neu gehört');
+      expect(manager.phases.value, isEmpty, reason: 'phase cleared when done');
+    });
+  });
+
+  test('the phase moves from transcribing to analysing, transcript already stored',
+      () async {
+    await phone.run((journal, storage) async {
+      await phone.audio('a.wav').create(recursive: true);
+      await journal.upsert(entry('a', transcript: '', audio: ['a.wav']));
+      final engine = _Engine((text) => _result(transcript: text ?? 'gehört'));
+      final manager = _manager(journal, storage, engine);
+      final seen = <AnalysisPhase?>[];
+      String? transcriptWhenAnalysing;
+      manager.phases.addListener(() {
+        final p = manager.phases.value['a'];
+        seen.add(p);
+        if (p == AnalysisPhase.analyzing) {
+          transcriptWhenAnalysing = journal.byId('a')!.transcript;
+        }
+      });
+      final run = manager.reanalyze(journal.byId('a')!);
+      await _settle();
+      expect(manager.phaseOf(journal.byId('a')!), AnalysisPhase.transcribing);
+      engine.gate.complete();
+      await run;
+
+      expect(seen, [AnalysisPhase.transcribing, AnalysisPhase.analyzing, null]);
+      expect(transcriptWhenAnalysing, anyOf('', 'gehört'));
+      expect(journal.byId('a')!.transcript, 'gehört');
     });
   });
 

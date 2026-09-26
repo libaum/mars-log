@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:mars_log/domain/journal_entry.dart';
 import 'package:mars_log/domain/mood.dart';
+import 'package:mars_log/logic/journal_manager.dart';
+import 'package:mars_log/services/service_locator.dart';
 import 'package:mars_log/theme/theme_constants.dart';
 
 /// One line in the timeline: date, mood, and the entry's title (the summary
@@ -53,11 +55,16 @@ class EntryTile extends StatelessWidget {
                   children: [
                     Text(formatRelativeDate(entry.day), style: TEXT_STYLE_DATE),
                     const SizedBox(height: 4),
-                    Text(
-                      _subtitle(),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: TEXT_STYLE_SUMMARY,
+                    // Listens to the phase: Whisper → model changes the
+                    // line without the entry itself changing.
+                    ValueListenableBuilder<Map<String, AnalysisPhase>>(
+                      valueListenable: getIt<JournalManager>().phases,
+                      builder: (context, _, _) => Text(
+                        _subtitle(),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TEXT_STYLE_SUMMARY,
+                      ),
                     ),
                   ],
                 ),
@@ -109,7 +116,9 @@ class EntryTile extends StatelessWidget {
   String _subtitle() {
     switch (entry.status) {
       case EntryStatus.analyzing:
-        return 'Wird analysiert …';
+        return getIt<JournalManager>().phaseOf(entry) == AnalysisPhase.transcribing
+            ? 'Wird transkribiert …'
+            : 'Wird analysiert …';
       case EntryStatus.failed:
         return entry.errorMessage ?? 'Analyse fehlgeschlagen';
       case EntryStatus.ready:

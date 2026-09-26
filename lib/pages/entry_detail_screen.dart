@@ -320,9 +320,25 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
             ),
         const SizedBox(height: 32),
 
-        if (analyzing)
-          const Text('Wird analysiert …', style: TEXT_STYLE_STATUS)
-        else if (entry.status == EntryStatus.failed)
+        if (analyzing) ...[
+          ValueListenableBuilder<Map<String, AnalysisPhase>>(
+            valueListenable: _journal.phases,
+            builder: (context, _, _) => Text(
+              _journal.phaseOf(entry) == AnalysisPhase.transcribing
+                  ? 'Wird transkribiert …'
+                  : 'Wird analysiert …',
+              style: TEXT_STYLE_STATUS,
+            ),
+          ),
+          // Whisper is done: the transcript is there to read while the model
+          // works on the rest.
+          if ((entry.transcript ?? '').isNotEmpty) ...[
+            const SizedBox(height: 28),
+            Text('TRANSKRIPT', style: TEXT_STYLE_LABEL),
+            const SizedBox(height: 10),
+            Text(entry.transcript!, style: TEXT_STYLE_BODY),
+          ],
+        ] else if (entry.status == EntryStatus.failed)
           Text(entry.errorMessage ?? 'Analyse fehlgeschlagen',
               style: TEXT_STYLE_SUMMARY.copyWith(color: COLOR_SECONDARY))
         else
@@ -411,12 +427,20 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
   }
 
   Widget _actions(JournalEntry entry, bool analyzing) {
+    final canTranscribe = !entry.audioDeleted && entry.audioFileNames.isNotEmpty;
     final reanalyzeButtons = [
+      // From the transcript: seconds, no Whisper.
       TextButton(
         onPressed: analyzing ? null : () => _journal.reanalyze(entry),
-        child: Text(analyzing ? 'Analysiert …' : 'Neu analysieren',
-            style: TEXT_STYLE_SETTING),
+        child: const Text('Neu analysieren', style: TEXT_STYLE_SETTING),
       ),
+      if (canTranscribe)
+        TextButton(
+          onPressed: analyzing
+              ? null
+              : () => _journal.reanalyze(entry, retranscribe: true),
+          child: const Text('Neu transkribieren', style: TEXT_STYLE_SETTING),
+        ),
     ];
 
     return Column(

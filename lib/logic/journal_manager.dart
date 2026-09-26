@@ -31,6 +31,31 @@ class JournalManager {
   /// fixes that; a loop of them would not help.
   final _retried = <String>{};
 
+  /// What each running entry is doing right now — Whisper takes minutes on
+  /// a long recording, the analysis seconds, and the UI tells them apart.
+  /// In memory only: after a restart [phaseOf] infers it.
+  final phases = ValueNotifier<Map<String, AnalysisPhase>>(const {});
+
+  void _setPhase(String id, AnalysisPhase? phase) {
+    if (phases.value[id] == phase) return;
+    final next = Map.of(phases.value);
+    if (phase == null) {
+      next.remove(id);
+    } else {
+      next[id] = phase;
+    }
+    phases.value = Map.unmodifiable(next);
+  }
+
+  /// The phase of an entry still being worked on; null if it isn't.
+  AnalysisPhase? phaseOf(JournalEntry e) {
+    if (e.status != EntryStatus.analyzing) return null;
+    return phases.value[e.id] ??
+        ((e.transcript ?? '').trim().isEmpty
+            ? AnalysisPhase.transcribing
+            : AnalysisPhase.analyzing);
+  }
+
   late final ValueNotifier<List<JournalEntry>> entriesNotifier;
   late final ValueNotifier<List<JournalEntry>> trashNotifier;
 
@@ -117,8 +142,10 @@ class JournalManager {
     _inFlight.add(id);
     try {
       await _task.run(() async {
+        _setPhase(id, AnalysisPhase.transcribing);
         final partial =
             await engine.transcribe([File(_repo.audioPath(rec.fileName))]);
+        _setPhase(id, AnalysisPhase.analyzing);
         final live = _repo.byId(id);
         if (live == null) {
           orphaned = true;
@@ -139,6 +166,7 @@ class JournalManager {
         await _repo.upsert(live);
         if (dropSnippet) await _repo.deleteAudioFile(rec.fileName);
 
+        _refresh(); // the transcript shows while the analysis runs
         final text = live.transcript!;
         final result = await engine.analyzeText(text);
         await _applyResult(id, result, engine.modelName, analyzedText: text);
@@ -147,22 +175,26 @@ class JournalManager {
       await _markFailed(id, e);
     } finally {
       _inFlight.remove(id);
+      _setPhase(id, null);
     }
     _refresh();
     if (orphaned) await createFromAudio(rec);
   }
 
-  /// Re-runs analysis on an existing entry; audio + previous data are kept
-  /// until the new result overwrites them.
-  Future<void> reanalyze(JournalEntry entry) async {
+  /// Re-runs the analysis of an existing entry from its transcript — no
+  /// Whisper, which takes minutes. [retranscribe]: transcribe the audio
+  /// again first (for a bad transcript); an entry without a transcript is
+  /// always transcribed. Previous data stays until the new result replaces it.
+  Future<void> reanalyze(JournalEntry entry, {bool retranscribe = false}) async {
     final live = _repo.byId(entry.id);
     if (live == null) return;
+    final hasTranscript = (live.transcript ?? '').trim().isNotEmpty;
     live
       ..status = EntryStatus.analyzing
       ..errorMessage = null;
     await _repo.upsert(live);
     _refresh();
-    await _analyze(live.id, _engine);
+    await _analyze(live.id, _engine, retranscribe: retranscribe || !hasTranscript);
   }
 
   /// [retranscribe]: run Whisper over the audio again. False when the entry
@@ -185,9 +217,12 @@ class JournalManager {
         // Once the audio is gone, the transcript is the only source to work
         // from.
         if (!before.audioDeleted && retranscribe) {
+          _setPhase(id, AnalysisPhase.transcribing);
           final transcript = await engine.transcribe(
             before.audioFileNames.map((f) => File(_repo.audioPath(f))).toList(),
           );
+          // Before the transcript is stored: the write repaints the list.
+          _setPhase(id, AnalysisPhase.analyzing);
           // Kept right away: Whisper took its time, and if the analysis
           // after it fails (model not downloaded yet, process killed), the
           // transcript must not be lost with it. A transcript corrected by
@@ -201,6 +236,7 @@ class JournalManager {
           }
           text = _repo.byId(id)?.transcript ?? transcript;
         }
+        _setPhase(id, AnalysisPhase.analyzing);
         final result = await engine.analyzeText(text);
         await _applyResult(id, result, engine.modelName, analyzedText: text);
       });
@@ -208,6 +244,7 @@ class JournalManager {
       await _markFailed(id, e);
     } finally {
       _inFlight.remove(id);
+      _setPhase(id, null);
     }
     _refresh();
   }
@@ -285,7 +322,10 @@ class JournalManager {
     for (final entry in _repo.entries) {
       if (_inFlight.contains(entry.id)) continue;
       if (entry.status == EntryStatus.analyzing) {
-        await _analyze(entry.id, _engine);
+        // Killed mid-way: if Whisper had finished, its transcript is stored —
+        // only the analysis is left.
+        final hasTranscript = (entry.transcript ?? '').trim().isNotEmpty;
+        await _analyze(entry.id, _engine, retranscribe: !hasTranscript);
       } else if (entry.status == EntryStatus.failed && _retried.add(entry.id)) {
         // On-device: a retry costs nothing but a few seconds. A transcript
         // that survived the failure is reused — only the analysis failed.
@@ -347,3 +387,6 @@ class JournalManager {
     _refresh();
   }
 }
+
+/// What a running entry is doing: Whisper, then the model.
+enum AnalysisPhase { transcribing, analyzing }
