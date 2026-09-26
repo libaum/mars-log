@@ -275,9 +275,8 @@ void main() {
     });
   });
 
-  test("the phone's re-analysis keeps the laptop's analysis of the same transcript",
-      () async {
-    await phone.run((journal, storage) async {
+  group('a laptop analysis of the same transcript', () {
+    Future<void> laptopAnalysed(JournalRepository journal) async {
       await phone.audio('a.wav').create(recursive: true);
       await journal.upsert(entry('a', transcript: 'alt', audio: ['a.wav']));
       await journal.writeAnalysis(
@@ -288,13 +287,49 @@ void main() {
         source: AnalysisSource.laptop,
         basis: transcriptBasis('alt'),
       );
-      final engine = _Engine((_) => _result(summary: 'vom Handy'))..gate.complete();
-      await _manager(journal, storage, engine).reanalyze(journal.byId('a')!);
+    }
 
-      final e = journal.byId('a')!;
-      expect(e.summary, 'vom Laptop');
-      expect(e.analysisSource, AnalysisSource.laptop);
-      expect(e.status, EntryStatus.ready);
+    test('stays against an automatic on-device pass', () async {
+      await phone.run((journal, storage) async {
+        await laptopAnalysed(journal);
+        // Killed mid-analysis earlier, resumed now.
+        await journal.upsert(journal.byId('a')!..status = EntryStatus.analyzing);
+        final engine = _Engine((_) => _result(summary: 'vom Handy'))..gate.complete();
+        await _manager(journal, storage, engine).resumePending();
+
+        final e = journal.byId('a')!;
+        expect(e.summary, 'vom Laptop');
+        expect(e.status, EntryStatus.ready);
+      });
+    });
+
+    test('is replaced when "Neu analysieren" is pressed', () async {
+      await phone.run((journal, storage) async {
+        await laptopAnalysed(journal);
+        final engine = _Engine((_) => _result(summary: 'vom Handy'))..gate.complete();
+        await _manager(journal, storage, engine).reanalyze(journal.byId('a')!);
+        expect(journal.byId('a')!.summary, 'vom Handy');
+      });
+    });
+
+    test('is replaced by a cloud model, even automatically', () async {
+      await phone.run((journal, storage) async {
+        await laptopAnalysed(journal);
+        await journal.upsert(journal.byId('a')!..status = EntryStatus.analyzing);
+        final engine = _Engine((t) => AnalysisResult(
+              transcript: t ?? 'alt',
+              summary: 'von Gemini',
+              moodLabel: 'gut',
+              moodScore: 7,
+              dimensions: const {},
+              tags: const [],
+              source: AnalysisSource.cloud,
+            ))
+          ..gate.complete();
+        await _manager(journal, storage, engine).resumePending();
+        expect(journal.byId('a')!.summary, 'von Gemini');
+        expect(journal.byId('a')!.analysisSource, AnalysisSource.cloud);
+      });
     });
   });
 

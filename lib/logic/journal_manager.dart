@@ -194,16 +194,25 @@ class JournalManager {
       ..errorMessage = null;
     await _repo.upsert(live);
     _refresh();
-    await _analyze(live.id, _engine, retranscribe: retranscribe || !hasTranscript);
+    await _analyze(
+      live.id,
+      _engine,
+      retranscribe: retranscribe || !hasTranscript,
+      asked: true,
+    );
   }
 
   /// [retranscribe]: run Whisper over the audio again. False when the entry
   /// already has a transcript from an earlier pass whose analysis failed —
   /// then only the analysis is repeated.
+  ///
+  /// [asked]: started by hand ("Neu analysieren" / "Neu transkribieren") —
+  /// the result replaces whatever analysis is there.
   Future<void> _analyze(
     String id,
     AnalysisEngine engine, {
     bool retranscribe = true,
+    bool asked = false,
   }) async {
     final start = _repo.byId(id);
     if (start == null) return;
@@ -238,7 +247,8 @@ class JournalManager {
         }
         _setPhase(id, AnalysisPhase.analyzing);
         final result = await engine.analyzeText(text);
-        await _applyResult(id, result, engine.modelName, analyzedText: text);
+        await _applyResult(id, result, engine.modelName,
+            analyzedText: text, asked: asked);
       });
     } catch (e) {
       await _markFailed(id, e);
@@ -255,19 +265,25 @@ class JournalManager {
   ///
   /// - A summary / tags edited by hand meanwhile (here or on the laptop) are
   ///   newer intent than an automatic result and stay ([JournalEntry.summaryByHand]).
-  /// - If the laptop's analysis of exactly this transcript arrived meanwhile,
-  ///   it is the better one and stays; only the entry's status moves on.
+  /// - The laptop's analysis of exactly this transcript beats the phone's
+  ///   on-device pre-analysis and stays — unless the user asked for this
+  ///   run ([asked]) or the result is a cloud model's (better than the
+  ///   laptop's); only the entry's status moves on then.
   Future<void> _applyResult(
     String id,
     AnalysisResult result,
     String model, {
     required String analyzedText,
+    bool asked = false,
   }) async {
     final live = _repo.byId(id);
     if (live == null) return; // purged meanwhile: nothing left to annotate
     final basis = transcriptBasis(analyzedText);
-    final laptopHasIt =
-        live.analysisSource == AnalysisSource.laptop && live.analysisBasis == basis;
+    final onDeviceResult = (result.source ?? AnalysisSource.phone) == AnalysisSource.phone;
+    final laptopHasIt = !asked &&
+        onDeviceResult &&
+        live.analysisSource == AnalysisSource.laptop &&
+        live.analysisBasis == basis;
     if (!laptopHasIt) {
       if (!live.titleByHand && result.title.isNotEmpty) live.title = result.title;
       if (!live.summaryByHand) live.summary = result.summary;
