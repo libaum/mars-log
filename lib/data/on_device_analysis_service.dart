@@ -39,9 +39,11 @@ bereits transkribierte Tagebuch des Nutzers. Antworte AUSSCHLIESSLICH mit
 einem JSON-Objekt, keine anderen Worte, kein Markdown, keine Code-Fences.
 
 Format exakt so (Zahlen ohne Anführungszeichen):
-{"summary":"...","moodLabel":"...","moodScore":0.0,"dimensions":{"positivity":0,"energy":0,"calm":0,"stress":0,"focus":0,"social":0},"tags":["..."]}
+{"title":"...","summary":"...","moodLabel":"...","moodScore":0.0,"dimensions":{"positivity":0,"energy":0,"calm":0,"stress":0,"focus":0,"social":0},"tags":["..."]}
 
 Regeln:
+- title: 2-5 Wörter, was den Tag ausgemacht hat (z.B. "Strandtag mit Lena",
+  "Stress vor der Prüfung"). Kein Datum, kein Satzzeichen am Ende.
 - summary: 2-3 Sätze aus der Ich-Perspektive, knapp.
 - moodLabel: ein einzelnes deutsches Wort für die Grundstimmung.
 - moodScore: 0.0 (sehr schlecht) bis 10.0 (großartig).
@@ -104,6 +106,7 @@ Transkript:
     final data = _extractJson(answer);
     return AnalysisResult(
       transcript: transcript,
+      title: (data['title'] as String?)?.trim() ?? '',
       summary: (data['summary'] as String?)?.trim() ?? '',
       moodLabel: (data['moodLabel'] as String?)?.trim() ?? '',
       moodScore: ((data['moodScore'] as num?)?.toDouble() ?? 5.0)

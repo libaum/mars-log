@@ -406,6 +406,7 @@ class JournalRepository {
   Future<void> edit(
     JournalEntry entry, {
     String? transcript,
+    String? title,
     String? summary,
     String? place,
     List<String>? tags,
@@ -413,6 +414,11 @@ class JournalRepository {
     final live = _live(entry);
     if (live == null) return;
     if (transcript != null) live.transcript = transcript;
+    if (title != null) {
+      final trimmed = title.trim();
+      live.title = trimmed.isEmpty ? null : trimmed;
+      live.titleByHand = true;
+    }
     if (summary != null) {
       live.summary = summary;
       // The human's now: travels with the entry, no analysis overwrites it.
@@ -444,6 +450,7 @@ class JournalRepository {
   }) async {
     final live = byId(id);
     if (live == null || transcriptBasis(live.transcript) != basis) return false;
+    if (!live.titleByHand && result.title.isNotEmpty) live.title = result.title;
     if (!live.summaryByHand) live.summary = result.summary;
     if (!live.tagsByHand) live.tags = result.tags;
     live
@@ -570,9 +577,11 @@ class JournalRepository {
   /// too, and [applySynced] then applies the one [JournalSyncRepository]
   /// split off it by the analysis clock like any other.
   void _keepAnalysis(JournalEntry local, JournalEntry incoming) {
+    final title = incoming.title;
     final summary = incoming.summary;
     final tags = incoming.tags;
     incoming
+      ..title = local.title
       ..summary = local.summary
       ..moodLabel = local.moodLabel
       ..moodScore = local.moodScore
@@ -583,6 +592,7 @@ class JournalRepository {
       ..analysisChangedAt = local.analysisChangedAt
       ..analysisSource = local.analysisSource
       ..analysisBasis = local.analysisBasis;
+    if (incoming.titleByHand) incoming.title = title;
     if (incoming.summaryByHand) incoming.summary = summary;
     if (incoming.tagsByHand) incoming.tags = tags;
     // The sending device's analysis failed, but this one holds an analysis of

@@ -336,6 +336,10 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
 
   List<Widget> _analysis(JournalEntry entry, Color primary) {
     return [
+      if ((entry.title ?? '').isNotEmpty) ...[
+        Text(entry.title!, style: TEXT_STYLE_SUMMARY),
+        const SizedBox(height: 24),
+      ],
       // Mood
       Row(
         crossAxisAlignment: CrossAxisAlignment.center,

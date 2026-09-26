@@ -790,6 +790,7 @@ void main() {
         id,
         AnalysisResult(
           transcript: j.byId(id)!.transcript!,
+          title: 'Laptop-Titel',
           summary: summary,
           moodLabel: 'gut',
           moodScore: 8,
@@ -859,6 +860,32 @@ void main() {
           expect(e.moodScore, 8, reason: '${d.id}: the rest of the analysis applies');
         });
       }
+    });
+
+    test("the laptop's title reaches the phone; a title set by hand stays", () async {
+      await phone.run((j, _) async {
+        await j.upsert(entry('a', transcript: 'eins'));
+        await j.upsert(entry('b', transcript: 'zwei'));
+      });
+      await phone.sync(hub, key);
+      await laptop.sync(hub, key);
+      await tick();
+      await phone.run((j, _) => j.edit(j.byId('b')!, title: 'Mein Titel'));
+      await phone.sync(hub, key);
+      await laptop.sync(hub, key);
+      await tick();
+      await laptop.run((j, _) async {
+        await laptopAnalyzes(j, 'a', 'x');
+        await laptopAnalyzes(j, 'b', 'y');
+      });
+      await laptop.sync(hub, key);
+      await phone.sync(hub, key);
+
+      await phone.run((j, _) async {
+        expect(j.byId('a')!.title, 'Laptop-Titel');
+        expect(j.byId('b')!.title, 'Mein Titel');
+        expect(j.byId('b')!.summary, 'y', reason: 'the rest of the analysis applies');
+      });
     });
 
     test('an item from before the split brings its analysis along', () async {

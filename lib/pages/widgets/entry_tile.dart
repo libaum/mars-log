@@ -3,7 +3,8 @@ import 'package:mars_log/domain/journal_entry.dart';
 import 'package:mars_log/domain/mood.dart';
 import 'package:mars_log/theme/theme_constants.dart';
 
-/// One line in the timeline: date, mood, and a glimpse of the summary.
+/// One line in the timeline: date, mood, and the entry's title (the summary
+/// for entries analysed before titles existed).
 ///
 /// In selection mode the mood glyph is replaced by a selection dot and
 /// unselected rows fade back, so the timeline stays one calm list.
@@ -112,6 +113,8 @@ class EntryTile extends StatelessWidget {
       case EntryStatus.failed:
         return entry.errorMessage ?? 'Analyse fehlgeschlagen';
       case EntryStatus.ready:
+        final title = entry.title?.trim();
+        if (title != null && title.isNotEmpty) return title;
         final s = entry.summary?.trim();
         return (s == null || s.isEmpty) ? 'Kein Text erkannt' : s;
     }

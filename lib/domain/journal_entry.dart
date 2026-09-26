@@ -42,6 +42,10 @@ class JournalEntry {
 
   EntryStatus status;
   String? transcript;
+
+  /// A few words for what the day was — the entry's name in every list.
+  /// Written by the analysis, or by hand ([titleByHand]).
+  String? title;
   String? summary;
   String? moodLabel;
   double? moodScore; // 0..10
@@ -78,6 +82,7 @@ class JournalEntry {
 
   bool summaryByHand;
   bool tagsByHand;
+  bool titleByHand;
 
   /// True once the audio file has been discarded after transcription. The entry
   /// then lives on the transcript alone; playback is unavailable.
@@ -102,6 +107,7 @@ class JournalEntry {
     DateTime? changedAt,
     this.status = EntryStatus.analyzing,
     this.transcript,
+    this.title,
     this.summary,
     this.moodLabel,
     this.moodScore,
@@ -115,6 +121,7 @@ class JournalEntry {
     this.analysisBasis,
     this.summaryByHand = false,
     this.tagsByHand = false,
+    this.titleByHand = false,
     this.deletedAt,
     this.audioDeleted = false,
     this.latitude,
@@ -133,6 +140,7 @@ class JournalEntry {
         'audioFileNames': audioFileNames,
         'status': status.name,
         'transcript': transcript,
+        'title': title,
         'summary': summary,
         'moodLabel': moodLabel,
         'moodScore': moodScore,
@@ -146,6 +154,7 @@ class JournalEntry {
         'analysisBasis': analysisBasis,
         'summaryByHand': summaryByHand,
         'tagsByHand': tagsByHand,
+        'titleByHand': titleByHand,
         'deletedAt': deletedAt?.toIso8601String(),
         'audioDeleted': audioDeleted,
         'latitude': latitude,
@@ -161,6 +170,7 @@ class JournalEntry {
     final json = toJson()..removeWhere((k, _) => kAnalysisKeys.contains(k));
     if (summaryByHand) json['summary'] = summary;
     if (tagsByHand) json['tags'] = tags;
+    if (titleByHand) json['title'] = title;
     return json..['v'] = 2;
   }
 
@@ -168,6 +178,7 @@ class JournalEntry {
   /// are left out: they travel with the entry item.
   Map<String, dynamic> toAnalysisItemJson() => {
         'id': '$id$kAnalysisItemSuffix',
+        if (!titleByHand) 'title': title,
         if (!summaryByHand) 'summary': summary,
         'moodLabel': moodLabel,
         'moodScore': moodScore,
@@ -183,6 +194,9 @@ class JournalEntry {
   /// [toAnalysisItemJson]) onto this entry. Summary / tags edited by hand
   /// stay. Returns nothing to stamp — the caller owns the clock.
   void takeAnalysisFrom(Map<String, dynamic> json) {
+    if (!titleByHand && json.containsKey('title')) {
+      title = json['title'] as String?;
+    }
     if (!summaryByHand && json.containsKey('summary')) {
       summary = json['summary'] as String?;
     }
@@ -220,6 +234,7 @@ class JournalEntry {
         orElse: () => EntryStatus.ready,
       ),
       transcript: json['transcript'] as String?,
+      title: json['title'] as String?,
       summary: json['summary'] as String?,
       moodLabel: json['moodLabel'] as String?,
       moodScore: (json['moodScore'] as num?)?.toDouble(),
@@ -238,6 +253,7 @@ class JournalEntry {
       analysisBasis: json['analysisBasis'] as String?,
       summaryByHand: json['summaryByHand'] as bool? ?? false,
       tagsByHand: json['tagsByHand'] as bool? ?? false,
+      titleByHand: json['titleByHand'] as bool? ?? false,
       deletedAt: json['deletedAt'] == null
           ? null
           : DateTime.parse(json['deletedAt'] as String),
@@ -255,6 +271,7 @@ const kAnalysisItemSuffix = ':analysis';
 /// The keys of [JournalEntry.toJson] that belong to the analysis item —
 /// summary and tags only while not edited by hand.
 const kAnalysisKeys = <String>{
+  'title',
   'summary',
   'moodLabel',
   'moodScore',
@@ -270,6 +287,9 @@ const kAnalysisKeys = <String>{
 /// Result of an analysis pass — the recomputable interpretation of one entry.
 class AnalysisResult {
   final String transcript;
+
+  /// 2–5 words for what the day was. Empty from engines that don't make one.
+  final String title;
   final String summary;
   final String moodLabel;
   final double moodScore;
@@ -278,6 +298,7 @@ class AnalysisResult {
 
   AnalysisResult({
     required this.transcript,
+    this.title = '',
     required this.summary,
     required this.moodLabel,
     required this.moodScore,

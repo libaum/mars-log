@@ -231,6 +231,7 @@ class JournalManager {
     final laptopHasIt =
         live.analysisSource == AnalysisSource.laptop && live.analysisBasis == basis;
     if (!laptopHasIt) {
+      if (!live.titleByHand && result.title.isNotEmpty) live.title = result.title;
       if (!live.summaryByHand) live.summary = result.summary;
       if (!live.tagsByHand) live.tags = result.tags;
       live
