@@ -6,7 +6,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mars_log/data/journal_repository.dart';
 import 'package:mars_log/data/local_storage_service.dart';
 import 'package:mars_log/domain/analysis_basis.dart';
+import 'package:mars_log/domain/insight.dart';
 import 'package:mars_log/domain/journal_entry.dart';
+import 'package:mars_log/domain/people_aliases.dart';
 import 'package:mars_log/sync/journal_sync_repository.dart';
 import 'package:mars_log/sync/sync_purge_trace.dart';
 import 'package:mars_sync/mars_sync.dart';
@@ -991,6 +993,51 @@ void main() {
     });
   });
 
+
+  group('insights', () {
+    Insight insight(DateTime at, String text) => Insight(
+          id: kOverallInsightId,
+          sections: [InsightSection('Muster', text)],
+          model: 'claude-code',
+          createdAt: at,
+          entryCount: 1,
+        );
+
+    test('an insight made on the laptop reaches the phone, a newer one replaces it',
+        () async {
+      await phone.run((j, _) => j.upsert(entry('a')));
+      await phone.sync(hub, key);
+      await laptop.sync(hub, key);
+      await laptop.run((j, _) => j.writeInsight(insight(DateTime.now(), 'alt')));
+      await laptop.sync(hub, key);
+      await phone.sync(hub, key);
+      expect(await phone.run((j, _) async => j.insight(kOverallInsightId)?.sections.single.text),
+          'alt');
+      expect(await phone.run((j, _) async => j.entries.length), 1,
+          reason: 'not mistaken for an entry');
+
+      await tick();
+      await laptop.run((j, _) => j.writeInsight(insight(DateTime.now(), 'neu')));
+      await laptop.sync(hub, key);
+      await phone.sync(hub, key);
+      expect(await phone.run((j, _) async => j.insight(kOverallInsightId)?.sections.single.text),
+          'neu');
+    });
+
+    test('names merged on the phone reach the laptop, a later edit wins', () async {
+      await phone.run(
+          (j, _) => j.writeAliases(const PeopleAliases().merge('Wincent', 'Vincent')));
+      await phone.sync(hub, key);
+      await laptop.sync(hub, key);
+      expect(await laptop.run((j, _) async => j.aliases.canonical('Wincent')), 'Vincent');
+
+      await tick();
+      await laptop.run((j, _) => j.writeAliases(j.aliases.split('Wincent')));
+      await laptop.sync(hub, key);
+      await phone.sync(hub, key);
+      expect(await phone.run((j, _) async => j.aliases.canonical('Wincent')), 'Wincent');
+    });
+  });
 }
 
 /// Watches the journal's temp-file writes: how many, and how many at once

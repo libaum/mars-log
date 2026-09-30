@@ -12,6 +12,9 @@ import 'package:mars_log/theme/theme_constants.dart';
 /// screens: here a double tap means zoom.
 class MapScreen extends StatelessWidget {
   final DateTime month;
+
+  /// Overrides the month heading (e.g. a single day's date).
+  final String? title;
   final Map<int, List<DayLocationPoint>> pointsByDay;
   final Map<int, double> moodByDay;
 
@@ -21,6 +24,7 @@ class MapScreen extends StatelessWidget {
   const MapScreen({
     super.key,
     required this.month,
+    this.title,
     required this.pointsByDay,
     required this.moodByDay,
     required this.onDayTap,
@@ -40,7 +44,7 @@ class MapScreen extends StatelessWidget {
               child: Row(
                 children: [
                   Expanded(
-                    child: Text(formatMonthYear(month),
+                    child: Text(title ?? formatMonthYear(month),
                         style: TEXT_STYLE_SETTING),
                   ),
                   GestureDetector(

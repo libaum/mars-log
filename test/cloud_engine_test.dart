@@ -187,10 +187,22 @@ void main() {
     );
   });
 
-  test('the device choice and unknown names use the on-device model', () {
-    expect(AnalysisProvider.byName(null), AnalysisProvider.device);
-    expect(AnalysisProvider.byName('cloud'), AnalysisProvider.device,
-        reason: 'the old audio-to-Gemini value must not switch a provider on');
+  test('Gemini is the default; an explicit device choice stays', () {
+    expect(AnalysisProvider.byName(null), AnalysisProvider.gemini);
+    expect(AnalysisProvider.byName('cloud'), AnalysisProvider.gemini);
+    expect(AnalysisProvider.byName('device'), AnalysisProvider.device);
+  });
+
+  test('no key stored: the on-device model analyses instead of failing', () async {
+    final selected = SelectedAnalysisEngine(
+      onDevice: _Local(),
+      cloud: {
+        AnalysisProvider.gemini: GeminiTextEngine(transcriber: _Local(), apiKey: () async => null),
+      },
+      provider: () => AnalysisProvider.gemini,
+    );
+    final r = await selected.analyzeText('x');
+    expect(r.summary, 'lokal');
   });
 
   test('a model the plan lacks is named as such, not as a bad key', () async {

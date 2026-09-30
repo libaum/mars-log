@@ -1,6 +1,8 @@
 import 'package:mars_log/data/journal_repository.dart';
 import 'package:mars_log/data/local_storage_service.dart';
+import 'package:mars_log/domain/insight.dart';
 import 'package:mars_log/domain/journal_entry.dart';
+import 'package:mars_log/domain/people_aliases.dart';
 import 'package:mars_sync/mars_sync.dart';
 
 /// Maps journal entries onto mars_sync's generic [SyncItem]s.
@@ -83,6 +85,35 @@ class JournalSyncRepository implements SyncRepository {
       }
     }
 
+    // Evaluations over the whole journal, made on the laptop.
+    for (final insight in _journal.insights) {
+      if (since != null && insight.createdAt.isBefore(since)) continue;
+      items.add(
+        SyncItem(
+          itemId: insight.id,
+          moduleId: _moduleId,
+          deviceId: _deviceId,
+          updatedAt: insight.createdAt,
+          payload: insight.toJson(),
+        ),
+      );
+    }
+
+    // Which names are the same person — edited by hand, one item.
+    final aliases = _journal.aliases;
+    final aliasesAt = aliases.changedAt;
+    if (aliasesAt != null && (since == null || !aliasesAt.isBefore(since))) {
+      items.add(
+        SyncItem(
+          itemId: kPeopleAliasesId,
+          moduleId: _moduleId,
+          deviceId: _deviceId,
+          updatedAt: aliasesAt,
+          payload: aliases.toJson(),
+        ),
+      );
+    }
+
     for (final MapEntry(key: id, value: mark) in _storage.getSyncPurged().entries) {
       // Filtered by when it was recorded, but competing with its stamp —
       // see PurgeMark.
@@ -114,7 +145,27 @@ class JournalSyncRepository implements SyncRepository {
     final upserts = <JournalEntry>[];
     final removed = <String, DateTime>{};
     final analyses = <SyncedAnalysis>[];
+    final insights = <Insight>[];
+    PeopleAliases? aliases;
     for (final item in items) {
+      if (item.itemId == kPeopleAliasesId) {
+        if (item.isDeleted || item.payload['id'] != item.itemId) continue;
+        try {
+          aliases = PeopleAliases.fromJson(item.payload);
+        } on Object {
+          continue;
+        }
+        continue;
+      }
+      if (item.itemId.startsWith(kInsightPrefix)) {
+        if (item.isDeleted || item.payload['id'] != item.itemId) continue;
+        try {
+          insights.add(Insight.fromJson(item.payload));
+        } on Object {
+          continue; // a newer build's shape — see the entry case below
+        }
+        continue;
+      }
       final isAnalysis = item.itemId.endsWith(kAnalysisItemSuffix);
       if (item.isDeleted) {
         // An analysis tombstone always comes with its entry's; that one
@@ -154,6 +205,8 @@ class JournalSyncRepository implements SyncRepository {
       }
     }
     await _journal.applySynced(upserts, removed, analyses: analyses);
+    if (insights.isNotEmpty) await _journal.applySyncedInsights(insights);
+    if (aliases != null) await _journal.applySyncedAliases(aliases);
   }
 
   @override

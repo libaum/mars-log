@@ -16,8 +16,11 @@ enum AnalysisProvider {
   final String label;
   const AnalysisProvider(this.label);
 
+  /// Gemini unless something else was chosen — the better analysis; without
+  /// a key or a connection it falls back to Gemma anyway
+  /// ([SelectedAnalysisEngine]).
   static AnalysisProvider byName(String? name) =>
-      values.firstWhere((p) => p.name == name, orElse: () => device);
+      values.firstWhere((p) => p.name == name, orElse: () => gemini);
 }
 
 class CloudException implements Exception {
@@ -26,7 +29,11 @@ class CloudException implements Exception {
   /// No connection (offline, timeout) — worth falling back to the on-device
   /// model rather than failing the entry. A rejected key is not.
   final bool network;
-  CloudException(this.message, {this.network = false});
+
+  /// No key stored — also a reason to fall back: Gemini is the default, and
+  /// an entry shouldn't fail only because no key was ever entered.
+  final bool missingKey;
+  CloudException(this.message, {this.network = false, this.missingKey = false});
   @override
   String toString() => message;
 }
@@ -91,6 +98,7 @@ Aufgaben:
    calm, stress, focus, social.
 6. tags: 3 bis 6 kurze Themen-Tags (deutsche Substantive, z. B. "Sport",
    "Arbeit", "Freunde").
+7. $kPeoplePromptRule
 
 Transkript:
 ''';
@@ -125,8 +133,12 @@ Zusammenfassungen:
         'type': 'array',
         'items': {'type': 'string'},
       },
+      'people': {
+        'type': 'array',
+        'items': {'type': 'string'},
+      },
     },
-    'required': ['title', 'summary', 'moodLabel', 'moodScore', 'dimensions', 'tags'],
+    'required': ['title', 'summary', 'moodLabel', 'moodScore', 'dimensions', 'tags', 'people'],
     'additionalProperties': false,
   };
 
@@ -166,6 +178,7 @@ Zusammenfassungen:
         for (final t in (json['tags'] as List<dynamic>? ?? const []))
           if (t.toString().trim().isNotEmpty) t.toString().trim(),
       ],
+      people: cleanPeople(json['people']),
       model: modelName,
       source: source,
     );
@@ -186,7 +199,10 @@ Zusammenfassungen:
   Future<Map<String, dynamic>> _generate(String prompt, Map<String, Object> schema) async {
     final key = (await apiKey())?.trim() ?? '';
     if (key.isEmpty) {
-      throw CloudException('Kein $provider-API-Key hinterlegt (Einstellungen → Analyse).');
+      throw CloudException(
+        'Kein $provider-API-Key hinterlegt (Einstellungen → Analyse).',
+        missingKey: true,
+      );
     }
     // One retry: a connection dropped in a network switch shouldn't fail the
     // entry.
@@ -404,7 +420,7 @@ class SelectedAnalysisEngine implements AnalysisEngine {
     try {
       return await run(engine);
     } on CloudException catch (e) {
-      if (!e.network) rethrow;
+      if (!e.network && !e.missingKey) rethrow;
       return run(onDevice);
     }
   }

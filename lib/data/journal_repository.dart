@@ -4,7 +4,9 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:mars_log/domain/analysis_basis.dart';
+import 'package:mars_log/domain/insight.dart';
 import 'package:mars_log/domain/journal_entry.dart';
+import 'package:mars_log/domain/people_aliases.dart';
 
 /// Where purges leave a trace, so the sync layer can still tell other devices
 /// about entries that no longer exist here. Null on a device without sync —
@@ -28,12 +30,21 @@ abstract class PurgeTrace {
 class JournalRepository {
   static const _indexFileName = 'entries.json';
   static const _audioDirName = 'audio';
+  static const _insightsFileName = 'insights.json';
+  static const _peopleFileName = 'people.json';
 
   /// How long trashed entries survive before they are purged automatically.
   static const trashRetention = Duration(days: 30);
 
   late final Directory _docsDir;
   final List<JournalEntry> _entries = [];
+
+  /// Evaluations over many entries ([Insight]), by id. Their own file: they
+  /// are not entries, and a broken one must never cost the index.
+  final Map<String, Insight> _insights = {};
+
+  /// Which extracted names are the same person — see [PeopleAliases].
+  PeopleAliases _aliases = const PeopleAliases();
 
   /// See [PurgeTrace]. Given at construction because the 30-day retention
   /// purge runs while loading — a trace installed afterwards would miss it.
@@ -106,6 +117,8 @@ class JournalRepository {
     await _docsDir.create(recursive: true);
     await Directory(audioDirPath).create(recursive: true);
 
+    await _readInsights();
+    await _readAliases();
     if (_readOnly) {
       await _readIndex();
       return;
@@ -172,6 +185,86 @@ class JournalRepository {
     }
   }
 
+  /// Recomputable, so an unreadable file just means none.
+  Future<void> _readInsights() async {
+    final file = File(_insightsPath);
+    if (!await file.exists()) return;
+    try {
+      final map = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+      for (final v in map.values) {
+        final insight = Insight.fromJson((v as Map).cast<String, dynamic>());
+        _insights[insight.id] = insight;
+      }
+    } catch (_) {
+      _insights.clear();
+    }
+  }
+
+  Future<void> _readAliases() async {
+    final file = File(_peoplePath);
+    if (!await file.exists()) return;
+    try {
+      _aliases = PeopleAliases.fromJson(
+          jsonDecode(await file.readAsString()) as Map<String, dynamic>);
+    } catch (_) {
+      _aliases = const PeopleAliases();
+    }
+  }
+
+  PeopleAliases get aliases => _aliases;
+
+  /// Stores aliases edited here; their [PeopleAliases.changedAt] is the clock.
+  Future<void> writeAliases(PeopleAliases aliases) {
+    _aliases = aliases;
+    return _persistFile(_peoplePath, aliases.toJson());
+  }
+
+  /// Aliases from a sync round, if newer than ours.
+  Future<void> applySyncedAliases(PeopleAliases incoming) async {
+    final local = _aliases.changedAt;
+    final remote = incoming.changedAt;
+    if (remote == null || (local != null && !remote.isAfter(local))) return;
+    await writeAliases(incoming);
+  }
+
+  Insight? insight(String id) => _insights[id];
+
+  List<Insight> get insights => List.unmodifiable(_insights.values);
+
+  /// Stores an insight made here (the hub). Its [Insight.createdAt] is the
+  /// clock; a newer one replaces an older one with the same id.
+  Future<void> writeInsight(Insight insight) async {
+    _insights[insight.id] = insight;
+    await _persistInsights();
+  }
+
+  /// Insights from a sync round, last-write-wins by [Insight.createdAt].
+  Future<void> applySyncedInsights(List<Insight> incoming) async {
+    var changed = false;
+    for (final i in incoming) {
+      final local = _insights[i.id];
+      if (local != null && !i.createdAt.isAfter(local.createdAt)) continue;
+      _insights[i.id] = i;
+      changed = true;
+    }
+    if (changed) await _persistInsights();
+  }
+
+  Future<void> _persistInsights() => _persistFile(
+      _insightsPath, _insights.map((k, v) => MapEntry(k, v.toJson())));
+
+  /// Same write discipline as the index: queued, temp file, rename.
+  Future<void> _persistFile(String path, Object json) {
+    assert(!_readOnly, 'a read-only JournalRepository must not write');
+    final done = _writes.then((_) async {
+      final tmp = File('$path.tmp');
+      await tmp.writeAsString(jsonEncode(json), flush: true);
+      await tmp.rename(path);
+    });
+    _writes = done.catchError((_) {});
+    return done.then((_) => revision.value++);
+  }
+
   /// Deletes audio files that no entry points to — e.g. a recording whose app
   /// process died mid-way (killed, crashed) before an entry was ever created.
   Future<void> _purgeOrphanedAudio() async {
@@ -185,6 +278,8 @@ class JournalRepository {
   }
 
   String get _indexPath => '${_docsDir.path}/$_indexFileName';
+  String get _insightsPath => '${_docsDir.path}/$_insightsFileName';
+  String get _peoplePath => '${_docsDir.path}/$_peopleFileName';
   String get audioDirPath => '${_docsDir.path}/$_audioDirName';
   String audioPath(String fileName) => '$audioDirPath/$fileName';
 
@@ -453,6 +548,7 @@ class JournalRepository {
     if (!live.titleByHand && result.title.isNotEmpty) live.title = result.title;
     if (!live.summaryByHand) live.summary = result.summary;
     if (!live.tagsByHand) live.tags = result.tags;
+    if (result.people != null) live.people = result.people;
     live
       ..moodLabel = result.moodLabel
       ..moodScore = result.moodScore
@@ -472,17 +568,31 @@ class JournalRepository {
     return true;
   }
 
-  /// Adds only a title to an entry whose analysis is otherwise kept — one
+  /// Adds only a missing title to an entry whose analysis is otherwise kept — one
   /// from before titles existed (Gemini). Same conditions as
   /// [writeAnalysis]: the entry as stored now, its transcript still the one
   /// with [basis]; a title set by hand stays. The title is the analysis
   /// item's, so that item's clock moves; its source and model don't.
-  Future<bool> writeTitle(String id, String title, {required String basis}) async {
+  ///
+  /// [people], when given, is added the same way — for kept analyses from
+  /// before that field existed — and like the title only into a gap: people
+  /// an analysis already named stay.
+  Future<bool> writeTitle(
+    String id,
+    String title, {
+    required String basis,
+    List<String>? people,
+  }) async {
     final live = byId(id);
     if (live == null || transcriptBasis(live.transcript) != basis) return false;
     final trimmed = title.trim();
-    if (live.titleByHand || trimmed.isEmpty) return true;
-    live.title = trimmed;
+    // Only fills a gap: an entry that already has a title keeps it.
+    final newTitle =
+        !live.titleByHand && trimmed.isNotEmpty && (live.title ?? '').isEmpty;
+    final newPeople = people != null && live.people == null;
+    if (!newTitle && !newPeople) return true;
+    if (newTitle) live.title = trimmed;
+    if (newPeople) live.people = people;
     await saveAnalysis(live, entryChanged: false);
     return true;
   }
@@ -602,6 +712,7 @@ class JournalRepository {
       ..moodScore = local.moodScore
       ..dimensions = local.dimensions
       ..tags = local.tags
+      ..people = local.people
       ..analysisModel = local.analysisModel
       ..analysisVersion = local.analysisVersion
       ..analysisChangedAt = local.analysisChangedAt

@@ -51,6 +51,11 @@ class JournalEntry {
   double? moodScore; // 0..10
   Map<String, int>? dimensions; // 0..100 per kMoodDimensions
   List<String> tags;
+
+  /// People the entry mentions, as the analysis named them. Null: never
+  /// asked for (analysed before the field existed) — tells "not yet
+  /// extracted" apart from "nobody mentioned" (empty).
+  List<String>? people;
   String? analysisModel;
   int? analysisVersion;
   String? errorMessage;
@@ -113,6 +118,7 @@ class JournalEntry {
     this.moodScore,
     this.dimensions,
     List<String>? tags,
+    this.people,
     this.analysisModel,
     this.analysisVersion,
     this.errorMessage,
@@ -146,6 +152,7 @@ class JournalEntry {
         'moodScore': moodScore,
         'dimensions': dimensions,
         'tags': tags,
+    'people': people,
         'analysisModel': analysisModel,
         'analysisVersion': analysisVersion,
         'errorMessage': errorMessage,
@@ -184,6 +191,7 @@ class JournalEntry {
         'moodScore': moodScore,
         'dimensions': dimensions,
         if (!tagsByHand) 'tags': tags,
+    'people': people,
         'analysisModel': analysisModel,
         'analysisVersion': analysisVersion,
         'analysisSource': analysisSource,
@@ -204,6 +212,8 @@ class JournalEntry {
       tags = (json['tags'] as List<dynamic>?)?.cast<String>() ?? const [];
     }
     final dims = json['dimensions'];
+    // An item from a build without the field leaves ours alone.
+    if (json.containsKey('people')) people = _people(json['people']);
     moodLabel = json['moodLabel'] as String?;
     moodScore = (json['moodScore'] as num?)?.toDouble();
     dimensions = dims == null
@@ -243,6 +253,7 @@ class JournalEntry {
           : (dims as Map<String, dynamic>)
               .map((k, v) => MapEntry(k, (v as num).toInt())),
       tags: (json['tags'] as List<dynamic>?)?.cast<String>() ?? const [],
+      people: _people(json['people']),
       analysisModel: json['analysisModel'] as String?,
       analysisVersion: json['analysisVersion'] as int?,
       errorMessage: json['errorMessage'] as String?,
@@ -265,6 +276,9 @@ class JournalEntry {
   }
 }
 
+List<String>? _people(Object? json) =>
+    (json as List<dynamic>?)?.map((p) => p.toString()).toList();
+
 /// Item-id suffix of an entry's analysis sync item.
 const kAnalysisItemSuffix = ':analysis';
 
@@ -277,6 +291,7 @@ const kAnalysisKeys = <String>{
   'moodScore',
   'dimensions',
   'tags',
+  'people',
   'analysisModel',
   'analysisVersion',
   'analysisChangedAt',
@@ -296,6 +311,9 @@ class AnalysisResult {
   final Map<String, int> dimensions;
   final List<String> tags;
 
+  /// People mentioned; null from engines that don't extract them.
+  final List<String>? people;
+
   /// Who produced it, for [JournalEntry.analysisModel] / analysisSource —
   /// set by the engine that actually answered (a cloud engine may have
   /// fallen back to the on-device one).
@@ -310,7 +328,32 @@ class AnalysisResult {
     required this.moodScore,
     required this.dimensions,
     required this.tags,
+    this.people,
     this.model,
     this.source,
   });
 }
+
+/// Cleans a model's `people` answer: trimmed, no empties, no duplicates
+/// (case-insensitive, first spelling wins), never the narrator.
+List<String> cleanPeople(Object? raw) {
+  const self = {'ich', 'mich', 'mir', 'selbst', 'ich selbst'};
+  final seen = <String>{};
+  return [
+    for (final p in (raw as List<dynamic>? ?? const []))
+      if (p.toString().trim() case final name
+          when name.isNotEmpty &&
+              !self.contains(name.toLowerCase()) &&
+              seen.add(name.toLowerCase()))
+        name,
+  ];
+}
+
+/// The rule for `people`, shared by every prompt.
+const kPeoplePromptRule =
+    'people: die Menschen, die im Eintrag vorkommen — mit Namen (z. B. '
+    '"Lena", "Herr Maier") oder als feste Bezugsperson ohne Namen (z. B. '
+    '"Mama", "Oma", "mein Chef" → "Chef"). Nicht ich selbst, keine Gruppen '
+    '("Freunde", "Kollegen"), keine Prominenten, über die nur gesprochen '
+    'wird. Jede Person einmal, immer gleich geschrieben (Vorname, wie im '
+    'Eintrag). Leere Liste, wenn niemand vorkommt.';

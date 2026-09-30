@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:mars_log/data/analysis_engine.dart';
+import 'package:mars_log/data/journal_repository.dart';
+import 'package:mars_log/domain/insight.dart';
 import 'package:mars_log/data/local_storage_service.dart';
 import 'package:mars_log/data/location_history_repository.dart';
 import 'package:mars_log/domain/day_location_point.dart';
 import 'package:mars_log/domain/journal_entry.dart';
 import 'package:mars_log/domain/mood.dart';
+import 'package:mars_log/domain/people_aliases.dart';
 import 'package:mars_log/domain/place_stats.dart';
 import 'package:mars_log/domain/stats.dart';
 import 'package:mars_log/logic/journal_manager.dart';
@@ -19,7 +22,7 @@ import 'package:mars_log/pages/widgets/year_grid.dart';
 import 'package:mars_log/services/service_locator.dart';
 import 'package:mars_log/theme/theme_constants.dart';
 
-/// Pure data visualizations over the journal: streak, a month's mood
+/// Pure data visualizations over the journal: recent mood, a month's mood
 /// calendar/trend/dimensions/tags. Reached by swiping down from the main
 /// screen's header.
 class StatsScreen extends StatefulWidget {
@@ -35,6 +38,10 @@ class _StatsScreenState extends State<StatsScreen> {
   final _storage = getIt<LocalStorageService>();
   final _locations = getIt<LocationHistoryRepository>();
   final _location = getIt<LocationService>();
+  final _repo = getIt<JournalRepository>();
+
+  /// The laptop's evaluation shows its first part; the rest on request.
+  bool _insightOpen = false;
 
   late DateTime _month;
 
@@ -134,7 +141,7 @@ class _StatsScreenState extends State<StatsScreen> {
                   .toList()
                 ..sort((a, b) => a.day.compareTo(b.day));
               final stats = MonthStats(_month, monthEntries);
-              final streak = currentStreak(entries);
+              final recent = recentMood(readyEntries);
 
               return GestureDetector(
                 behavior: HitTestBehavior.translucent,
@@ -151,7 +158,7 @@ class _StatsScreenState extends State<StatsScreen> {
                   children: [
                     Text('Statistik', style: TEXT_STYLE_TITLE),
                     const SizedBox(height: 28),
-                    _overview(entries.length, streak, primary),
+                    _overview(entries.length, recent, primary),
                     const SizedBox(height: 40),
                     _monthNav(primary),
                     const SizedBox(height: 24),
@@ -195,10 +202,25 @@ class _StatsScreenState extends State<StatsScreen> {
     );
   }
 
-  Widget _overview(int totalEntries, int streak, Color primary) {
+  Widget _overview(int totalEntries, RecentMood recent, Color primary) {
+    final change = recent.change;
+    // Arrow only for a change you'd notice; ±0.2 is noise on a 0–10 scale.
+    final trend = change == null || change.abs() < 0.2
+        ? ''
+        : change > 0
+        ? ' ↑'
+        : ' ↓';
     return Row(
       children: [
-        Expanded(child: _overviewStat('$streak', 'Tage Serie', primary)),
+        Expanded(
+          child: _overviewStat(
+            recent.current == null
+                ? '–'
+                : '${recent.current!.toStringAsFixed(1)}$trend',
+            'Ø Stimmung 30 Tage',
+            primary,
+          ),
+        ),
         Expanded(child: _overviewStat('$totalEntries', 'Einträge gesamt', primary)),
       ],
     );
@@ -459,6 +481,7 @@ class _StatsScreenState extends State<StatsScreen> {
   List<JournalEntry>? _statsSource;
   AllTimeStats? _allTime;
   List<PlaceCluster>? _placeClusters;
+  Map<String, double> _moodByDate = const {};
 
   /// [source] must be the notifier's own list, not a derived one: a filtered
   /// copy is a fresh object on every build, so keying on that would make the
@@ -466,14 +489,17 @@ class _StatsScreenState extends State<StatsScreen> {
   void _ensureStats(List<JournalEntry> source, List<JournalEntry> ready) {
     if (identical(_statsSource, source)) return;
     _statsSource = source;
-    final all = AllTimeStats(ready);
+    final all = AllTimeStats(ready, aliases: _repo.aliases);
     _allTime = all;
+    _moodByDate = {
+      for (final e in ready)
+        if (e.moodScore != null) _dateKey(e.day): e.moodScore!,
+    };
+    // More than are shown: merging by name below may fold some together.
     _placeClusters = clusterPlaces(
       pointsByDate: _locations.byDay,
-      moodByDate: {
-        for (final e in ready)
-          if (e.moodScore != null) _dateKey(e.day): e.moodScore!,
-      },
+      moodByDate: _moodByDate,
+      limit: 16,
     );
   }
 
@@ -493,16 +519,30 @@ class _StatsScreenState extends State<StatsScreen> {
         ..add(section);
     }
 
+    add(_insight(_repo.insight(kOverallInsightId), primary));
+
     add(_yearGrid(all));
 
     final places = _placeClusters ?? const <PlaceCluster>[];
     if (places.isNotEmpty) {
       _resolvePlaceLabels(places);
-      add(_places(places, isDark, primary));
+      // Two clusters geocoded to the same name are one place to you.
+      final named = mergePlacesByLabel(
+        places,
+        (p) => _placeLabels[_placeKey(p)],
+        _moodByDate,
+      ).take(8).toList();
+      add(_places(named, isDark, primary));
     }
 
     final tagMoods = all.tagMoods;
     if (tagMoods.isNotEmpty) add(_tagMoods(tagMoods, isDark, primary));
+
+    // Shown as soon as anyone is named — even below the threshold the names
+    // can already be merged, which is what may lift someone over it.
+    if (all.allPeople.isNotEmpty) {
+      add(_personMoods(all, all.personMoods, isDark, primary));
+    }
 
     final byWeekday = all.moodByWeekday;
     if (byWeekday.isNotEmpty) add(_weekdayMoods(byWeekday, isDark, primary));
@@ -517,6 +557,53 @@ class _StatsScreenState extends State<StatsScreen> {
     add(_language(all, primary));
 
     return sections;
+  }
+
+  /// The written evaluation over everything — made on the laptop (Mars Hub
+  /// runs Claude Code), synced here. The phone's model is too small for it.
+  Widget _insight(Insight? insight, Color primary) {
+    if (insight == null || insight.sections.isEmpty) {
+      return Text(
+        'Eine geschriebene Auswertung über alle Einträge erstellt der '
+        'Mars Hub am Laptop.',
+        style: TEXT_STYLE_STATUS,
+      );
+    }
+    final shown = _insightOpen ? insight.sections : insight.sections.take(1);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('AUSWERTUNG', style: TEXT_STYLE_LABEL),
+        const SizedBox(height: 8),
+        Text(
+          '${formatDayTitle(insight.createdAt)} · '
+          'aus ${insight.entryCount} Einträgen · am Laptop',
+          style: TEXT_STYLE_STATUS,
+        ),
+        for (final section in shown) ...[
+          const SizedBox(height: 20),
+          if (section.title.isNotEmpty) ...[
+            Text(section.title, style: TEXT_STYLE_SUMMARY),
+            const SizedBox(height: 8),
+          ],
+          Text(section.text, style: TEXT_STYLE_BODY),
+        ],
+        if (insight.sections.length > 1)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: TextButton(
+              style: TextButton.styleFrom(padding: EdgeInsets.zero),
+              onPressed: () => setState(() => _insightOpen = !_insightOpen),
+              child: Text(
+                _insightOpen
+                    ? 'Weniger'
+                    : 'Weiterlesen · ${insight.sections.length - 1} weitere',
+                style: TEXT_STYLE_SETTING,
+              ),
+            ),
+          ),
+      ],
+    );
   }
 
   /// Same `yyyy-MM-dd` key the location history buckets by.
@@ -676,6 +763,272 @@ class _StatsScreenState extends State<StatsScreen> {
       ),
     );
   }
+
+  /// People ranked by how the days they came up in felt. Tap one for the
+  /// dimensions on those days.
+  Widget _personMoods(
+    AllTimeStats all,
+    List<PersonMood> people,
+    bool isDark,
+    Color primary,
+  ) {
+    final truncated = people.length > 12;
+    final shown = truncated
+        ? [...people.take(6), ...people.skip(people.length - 6)]
+        : people;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('MENSCHEN × STIMMUNG', style: TEXT_STYLE_LABEL),
+        const SizedBox(height: 8),
+        Text(
+          'Wie die Tage waren, an denen jemand vorkam — '
+          'Abweichung von deinem Schnitt. Tippen für mehr.'
+          '${all.peopleCoverage < 0.9 ? ' (Erst ${(all.peopleCoverage * 100).round()} % der Einträge ausgewertet.)' : ''}',
+          style: TEXT_STYLE_STATUS,
+        ),
+        const SizedBox(height: 16),
+        for (var i = 0; i < shown.length; i++) ...[
+          if (truncated && i == 6)
+            Padding(
+              padding: const EdgeInsets.only(left: 96, bottom: 12),
+              child: Text(
+                '… ${people.length - 12} weitere',
+                style: TEXT_STYLE_STATUS,
+              ),
+            ),
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => _showPerson(all, shown[i].name, primary),
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Row(
+                children: [
+                  SizedBox(
+                    width: 96,
+                    child: Text(
+                      shown[i].name,
+                      overflow: TextOverflow.ellipsis,
+                      style: TEXT_STYLE_STATUS,
+                    ),
+                  ),
+                  Expanded(
+                    child: _moodBar(shown[i].averageMood, isDark, primary),
+                  ),
+                  const SizedBox(width: 12),
+                  SizedBox(
+                    width: 72,
+                    child: Text(
+                      '${shown[i].difference >= 0 ? '+' : '−'}'
+                      '${shown[i].difference.abs().toStringAsFixed(1)}'
+                      ' · ${shown[i].count}×',
+                      textAlign: TextAlign.right,
+                      style: TEXT_STYLE_STATUS,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+        TextButton(
+          style: TextButton.styleFrom(padding: EdgeInsets.zero),
+          onPressed: () => _showAllPeople(all, primary),
+          child: Text(
+            'Alle ${all.allPeople.length} Namen · zusammenführen',
+            style: TEXT_STYLE_SETTING,
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Every name the analysis wrote down, also the ones seen once — that's
+  /// where the misspellings are.
+  void _showAllPeople(AllTimeStats all, Color primary) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (sheet) => _peopleList(
+        title: 'Namen',
+        hint: 'Tippen, um umzubenennen oder zusammenzuführen.',
+        people: all.allPeople,
+        onPick: (name) {
+          Navigator.pop(sheet);
+          _showPerson(all, name, primary);
+        },
+      ),
+    );
+  }
+
+  Widget _peopleList({
+    required String title,
+    required String hint,
+    required List<MapEntry<String, int>> people,
+    required void Function(String name) onPick,
+  }) {
+    return ConstrainedBox(
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.of(context).size.height * 0.75,
+      ),
+      child: ListView(
+        shrinkWrap: true,
+        padding: const EdgeInsets.fromLTRB(32, 32, 32, 32),
+        children: [
+          Text(title, style: TEXT_STYLE_SUMMARY),
+          const SizedBox(height: 6),
+          Text(hint, style: TEXT_STYLE_STATUS),
+          const SizedBox(height: 16),
+          for (final p in people)
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () => onPick(p.key),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 10),
+                child: Row(
+                  children: [
+                    Expanded(child: Text(p.key, style: TEXT_STYLE_BODY)),
+                    Text('${p.value}×', style: TEXT_STYLE_STATUS),
+                  ],
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// One person: how their days felt (if there are enough), the names
+  /// merged into them, and renaming / merging.
+  void _showPerson(AllTimeStats all, String name, Color primary) {
+    final person = all.personMoods.where((p) => p.name == name).firstOrNull;
+    final aliases = all.aliases.aliasesOf(name);
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (sheet) => SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(32, 32, 32, 32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(name, style: TEXT_STYLE_SUMMARY),
+            const SizedBox(height: 6),
+            if (person != null)
+              Text(
+                'Ø ${person.averageMood.toStringAsFixed(1)} / 10 an '
+                '${person.count} Tagen · '
+                '${person.difference >= 0 ? '+' : '−'}'
+                '${person.difference.abs().toStringAsFixed(1)} ggü. deinem Schnitt',
+                style: TEXT_STYLE_STATUS,
+              )
+            else
+              Text(
+                'Zu selten für eine Aussage '
+                '(ab ${AllTimeStats.minEntriesPerTag} Einträgen).',
+                style: TEXT_STYLE_STATUS,
+              ),
+            if (person != null && person.dimensions.isNotEmpty) ...[
+              const SizedBox(height: 24),
+              ...kMoodDimensions.map(
+                (d) => DimensionBar(
+                  dimensionKey: d,
+                  value: person.dimensions[d] ?? 0,
+                  primary: primary,
+                ),
+              ),
+            ],
+            if (aliases.isNotEmpty) ...[
+              const SizedBox(height: 20),
+              Text('AUCH GENANNT', style: TEXT_STYLE_LABEL),
+              const SizedBox(height: 4),
+              for (final alias in aliases)
+                Row(
+                  children: [
+                    Expanded(child: Text(alias, style: TEXT_STYLE_BODY)),
+                    TextButton(
+                      onPressed: () {
+                        Navigator.pop(sheet);
+                        _saveAliases(all.aliases.split(alias));
+                      },
+                      child: Text('Trennen',
+                          style: TEXT_STYLE_STATUS.copyWith(color: primary)),
+                    ),
+                  ],
+                ),
+            ],
+            const SizedBox(height: 16),
+            Wrap(
+              spacing: 8,
+              children: [
+                TextButton(
+                  onPressed: () {
+                    Navigator.pop(sheet);
+                    _renamePerson(all.aliases, name);
+                  },
+                  child: const Text('Umbenennen', style: TEXT_STYLE_SETTING),
+                ),
+                TextButton(
+                  onPressed: () {
+                    Navigator.pop(sheet);
+                    _mergePerson(all, name);
+                  },
+                  child: const Text('Ist dieselbe Person wie …',
+                      style: TEXT_STYLE_SETTING),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _renamePerson(PeopleAliases aliases, String name) async {
+    final controller = TextEditingController(text: name);
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Name', style: TEXT_STYLE_SETTING),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(hintText: 'z.B. Vincent (Bruder)'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, controller.text),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    if (result != null) await _saveAliases(aliases.rename(name, result));
+  }
+
+  /// [name] is folded into the person picked next — they keep their name.
+  void _mergePerson(AllTimeStats all, String name) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (sheet) => _peopleList(
+        title: '$name ist …',
+        hint: 'Die Person, unter deren Namen beide zusammengefasst werden.',
+        people: all.allPeople.where((p) => p.key != name).toList(),
+        onPick: (target) {
+          Navigator.pop(sheet);
+          _saveAliases(all.aliases.merge(name, target));
+        },
+      ),
+    );
+  }
+
+  /// The journal's revision fires after the write, which rebuilds the stats.
+  Future<void> _saveAliases(PeopleAliases aliases) => _repo.writeAliases(aliases);
 
   /// Average mood per weekday — Monday first, matching the calendar.
   Widget _weekdayMoods(Map<int, double> byWeekday, bool isDark, Color primary) {

@@ -288,6 +288,7 @@ class JournalManager {
       if (!live.titleByHand && result.title.isNotEmpty) live.title = result.title;
       if (!live.summaryByHand) live.summary = result.summary;
       if (!live.tagsByHand) live.tags = result.tags;
+      if (result.people != null) live.people = result.people;
       live
         ..moodLabel = result.moodLabel
         ..moodScore = result.moodScore

@@ -2,6 +2,10 @@ import 'dart:io';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
 import 'package:mars_log/data/journal_repository.dart';
+import 'package:mars_log/data/location_history_repository.dart';
+import 'package:mars_log/domain/day_location_point.dart';
+import 'package:mars_log/pages/map_screen.dart';
+import 'package:mars_log/pages/widgets/mood_map.dart';
 import 'package:mars_log/domain/journal_entry.dart';
 import 'package:mars_log/domain/mood.dart';
 import 'package:mars_log/logic/journal_manager.dart';
@@ -14,7 +18,9 @@ import 'package:mars_log/theme/theme_constants.dart';
 
 /// Full view of one entry: audio, transcript, summary, mood, tags.
 /// Reacts live to re-analysis via the journal's entriesNotifier.
-/// Swipe left/right to page to the next/previous day's entry.
+/// Swipe left/right to page to the next/previous day's entry; pull down at
+/// the top of an entry to close. Vertical scrolling locks the pager so a
+/// slightly diagonal drag doesn't make the page wobble sideways.
 class EntryDetailScreen extends StatefulWidget {
   final String entryId;
   const EntryDetailScreen({super.key, required this.entryId});
@@ -26,6 +32,13 @@ class EntryDetailScreen extends StatefulWidget {
 class _EntryDetailScreenState extends State<EntryDetailScreen> {
   final _journal = getIt<JournalManager>();
   final _repo = getIt<JournalRepository>();
+  final _locations = getIt<LocationHistoryRepository>();
+  // Axis lock for the current touch: vertical drags disable the pager.
+  final _pagerLocked = ValueNotifier<bool>(false);
+  Offset _touchDelta = Offset.zero;
+  // Pull-down-to-close state.
+  final _pullOffset = ValueNotifier<double>(0);
+  static const _closeThreshold = 110.0;
   final _player = AudioPlayer();
   late String _currentId = widget.entryId;
   PageController? _pageController;
@@ -44,6 +57,8 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
   @override
   void dispose() {
     _pageController?.dispose();
+    _pagerLocked.dispose();
+    _pullOffset.dispose();
     _player.dispose();
     super.dispose();
   }
@@ -182,20 +197,7 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
               } else {
                 _keepPage(index);
               }
-              return PageView.builder(
-                controller: _pageController,
-                itemCount: pages.length,
-                onPageChanged: (i) => _onPageChanged(pages, i),
-                findChildIndexCallback: (key) {
-                  final i = pages.indexWhere(
-                      (e) => e.id == (key as ValueKey<String>).value);
-                  return i < 0 ? null : i;
-                },
-                itemBuilder: (context, i) => KeyedSubtree(
-                  key: ValueKey(pages[i].id),
-                  child: _content(pages[i]),
-                ),
-              );
+              return _pager(pages);
             },
           ),
         ),
@@ -203,11 +205,78 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
     );
   }
 
+  /// Decides the gesture axis from the first few pixels of a touch: unless
+  /// the drag is clearly horizontal, the pager is switched off for it.
+  Widget _pager(List<JournalEntry> pages) {
+    return Listener(
+      onPointerDown: (_) {
+        _touchDelta = Offset.zero;
+        _pagerLocked.value = false;
+      },
+      onPointerMove: (e) {
+        if (_pagerLocked.value) return;
+        _touchDelta += e.delta;
+        if (_touchDelta.distance > 6 &&
+            _touchDelta.dx.abs() < _touchDelta.dy.abs() * 2) {
+          _pagerLocked.value = true;
+        }
+      },
+      child: NotificationListener<ScrollNotification>(
+        onNotification: _onScroll,
+        child: ValueListenableBuilder<double>(
+          valueListenable: _pullOffset,
+          builder: (context, pull, child) =>
+              Transform.translate(offset: Offset(0, pull), child: child),
+          child: ValueListenableBuilder<bool>(
+            valueListenable: _pagerLocked,
+            builder: (context, locked, _) => PageView.builder(
+              physics: locked ? const NeverScrollableScrollPhysics() : null,
+              controller: _pageController,
+              itemCount: pages.length,
+              onPageChanged: (i) => _onPageChanged(pages, i),
+              findChildIndexCallback: (key) {
+                final i = pages.indexWhere(
+                    (e) => e.id == (key as ValueKey<String>).value);
+                return i < 0 ? null : i;
+              },
+              itemBuilder: (context, i) => KeyedSubtree(
+                key: ValueKey(pages[i].id),
+                child: _content(pages[i]),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Pull-down-to-close: overscroll at the top moves the page down with the
+  /// finger; released far enough, the entry closes, otherwise it snaps back.
+  bool _onScroll(ScrollNotification n) {
+    if (n.metrics.axis != Axis.vertical) return false;
+    if (n is OverscrollNotification &&
+        n.overscroll < 0 &&
+        n.dragDetails != null) {
+      _pullOffset.value = (_pullOffset.value - n.overscroll).clamp(0, 240);
+    } else if (n is ScrollEndNotification && _pullOffset.value > 0) {
+      final close = _pullOffset.value >= _closeThreshold;
+      _pullOffset.value = 0;
+      if (close && !_leaving) {
+        _leaving = true;
+        Navigator.pop(context);
+      }
+    }
+    return false;
+  }
+
   Widget _content(JournalEntry entry) {
     final primary = Theme.of(context).colorScheme.primary;
     final analyzing = entry.status == EntryStatus.analyzing;
 
     return ListView(
+      // Clamping, so pulling past the top reports overscroll (see _onScroll)
+      // instead of bouncing.
+      physics: const ClampingScrollPhysics(),
       padding: const EdgeInsets.fromLTRB(32, 24, 32, 48),
       children: [
         // Tap the date to move the entry to another day (backdating).
@@ -344,10 +413,48 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
         else
           ..._analysis(entry, primary),
 
+        ..._dayMap(entry),
+
         const SizedBox(height: 40),
         _actions(entry, analyzing),
       ],
     );
+  }
+
+  /// Route of the entry's day only, at the very bottom. Needs two fixes to
+  /// draw a line; otherwise nothing is shown.
+  List<Widget> _dayMap(JournalEntry entry) {
+    final points = _locations.pointsForDay(entry.day);
+    if (points.length < 2) return const [];
+    final byDay = <int, List<DayLocationPoint>>{entry.day.day: points};
+    final mood = <int, double>{
+      if (entry.moodScore != null) entry.day.day: entry.moodScore!,
+    };
+    void open() => Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => MapScreen(
+              month: entry.day,
+              title: formatDayTitle(entry.day),
+              pointsByDay: byDay,
+              moodByDay: mood,
+              onDayTap: (_) {},
+            ),
+          ),
+        );
+    return [
+      const SizedBox(height: 40),
+      Text('STANDORTVERLAUF', style: TEXT_STYLE_LABEL),
+      const SizedBox(height: 16),
+      MoodMap(
+        pointsByDay: byDay,
+        moodByDay: mood,
+        monthKey: '${entry.day.year}-${entry.day.month}-${entry.day.day}',
+        // Any tap — on the route or beside it — opens it fullscreen.
+        onTapEmpty: open,
+        onDayTap: (_) => open(),
+      ),
+    ];
   }
 
   List<Widget> _analysis(JournalEntry entry, Color primary) {
@@ -397,6 +504,14 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
                   ))
               .toList(),
         ),
+        const SizedBox(height: 28),
+      ],
+
+      if ((entry.people ?? const []).isNotEmpty) ...[
+        Text('MENSCHEN', style: TEXT_STYLE_LABEL),
+        const SizedBox(height: 10),
+        Text(_repo.aliases.apply(entry.people!).join(' · '),
+            style: TEXT_STYLE_BODY),
         const SizedBox(height: 28),
       ],
 

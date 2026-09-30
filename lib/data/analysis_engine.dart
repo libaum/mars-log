@@ -3,7 +3,8 @@ import 'package:mars_log/domain/journal_entry.dart';
 
 /// Bump when the prompt or schema changes, so entries can be re-analysed later.
 /// 2: analysis moved on-device (Whisper + Gemma 4 E2B); no cloud AI anymore.
-const kAnalysisVersion = 2;
+/// 3: people.
+const kAnalysisVersion = 3;
 
 /// Anything that can turn audio (or a transcript) into an [AnalysisResult].
 /// Implemented by [OnDeviceAnalysisEngine]: nothing leaves the phone. Kept as

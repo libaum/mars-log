@@ -1,6 +1,7 @@
 import 'dart:math';
 
 import 'package:mars_log/domain/journal_entry.dart';
+import 'package:mars_log/domain/people_aliases.dart';
 
 /// Aggregated stats for the ready entries of a single calendar month.
 class MonthStats {
@@ -64,6 +65,28 @@ class TagMood {
   TagMood(this.tag, this.averageMood, this.count);
 }
 
+/// A person with how the days they came up in felt, against your average.
+class PersonMood {
+  final String name;
+  final double averageMood;
+  final int count;
+
+  /// [averageMood] minus the average of all scored entries: positive means
+  /// days with this person tend to be better than your usual.
+  final double difference;
+
+  /// Average of each mood dimension on those days, for a closer look.
+  final Map<String, int> dimensions;
+
+  PersonMood(
+    this.name,
+    this.averageMood,
+    this.count,
+    this.difference,
+    this.dimensions,
+  );
+}
+
 /// Aggregations across *all* ready entries rather than a single month.
 ///
 /// A month rarely holds enough entries for any of this to mean something —
@@ -78,7 +101,10 @@ class AllTimeStats {
   /// A tag needs at least this many entries before its average means much.
   static const minEntriesPerTag = 3;
 
-  AllTimeStats(this.entries);
+  /// Which extracted names are the same person.
+  final PeopleAliases aliases;
+
+  AllTimeStats(this.entries, {this.aliases = const PeopleAliases()});
 
   /// All of these are `late final` on purpose: the stats screen reads several
   /// of them per build, and each one walks the whole entry list.
@@ -107,6 +133,78 @@ class AllTimeStats {
       ..sort((a, b) => b.averageMood.compareTo(a.averageMood));
     return list;
   }
+
+  /// People ranked by the mood of the entries they come up in, best first.
+  /// Same threshold as tags. Names are grouped case-insensitively; the most
+  /// used spelling is shown.
+  late final List<PersonMood> personMoods = _computePersonMoods();
+
+  List<PersonMood> _computePersonMoods() {
+    if (_scored.isEmpty) return const [];
+    final overall =
+        _scored.map((e) => e.moodScore!).reduce((a, b) => a + b) /
+        _scored.length;
+    final byKey = <String, List<JournalEntry>>{};
+    final spellings = <String, Map<String, int>>{};
+    for (final e in _scored) {
+      for (final name in aliases.apply(e.people ?? const [])) {
+        final key = name.toLowerCase();
+        (byKey[key] ??= []).add(e);
+        final s = spellings[key] ??= {};
+        s[name] = (s[name] ?? 0) + 1;
+      }
+    }
+    final list = <PersonMood>[];
+    for (final MapEntry(:key, value: days) in byKey.entries) {
+      if (days.length < minEntriesPerTag) continue;
+      final avg =
+          days.map((e) => e.moodScore!).reduce((a, b) => a + b) / days.length;
+      final withDims = days.where((e) => e.dimensions != null).toList();
+      final name =
+          (spellings[key]!.entries.toList()
+                ..sort((a, b) => b.value.compareTo(a.value)))
+              .first
+              .key;
+      list.add(
+        PersonMood(name, avg, days.length, avg - overall, {
+          for (final d in kMoodDimensions)
+            if (withDims.isNotEmpty)
+              d:
+                  (withDims
+                              .map((e) => e.dimensions![d] ?? 0)
+                              .reduce((a, b) => a + b) /
+                          withDims.length)
+                      .round(),
+        }),
+      );
+    }
+    return list..sort((a, b) => b.averageMood.compareTo(a.averageMood));
+  }
+
+  /// Every person with how many entries they come up in — no threshold, so
+  /// a misspelling seen once can be picked when merging names. Most first.
+  late final List<MapEntry<String, int>> allPeople = _computeAllPeople();
+
+  List<MapEntry<String, int>> _computeAllPeople() {
+    final counts = <String, int>{};
+    final shown = <String, String>{};
+    for (final e in entries) {
+      for (final name in aliases.apply(e.people ?? const [])) {
+        final key = name.toLowerCase();
+        shown.putIfAbsent(key, () => name);
+        counts[key] = (counts[key] ?? 0) + 1;
+      }
+    }
+    return [
+      for (final MapEntry(:key, :value) in counts.entries) MapEntry(shown[key]!, value),
+    ]..sort((a, b) => b.value.compareTo(a.value));
+  }
+
+  /// Share of scored entries that already have people extracted — the
+  /// section says so while a re-analysis is still catching up.
+  late final double peopleCoverage = _scored.isEmpty
+      ? 0
+      : _scored.where((e) => e.people != null).length / _scored.length;
 
   /// Average mood per weekday (`DateTime.monday`..`DateTime.sunday`).
   late final Map<int, double> moodByWeekday = _computeMoodByWeekday();
@@ -309,23 +407,41 @@ const _stopwords = <String>{
   'heute', 'gestern', 'morgen', 'tag', 'mach', 'machen', 'geht', 'gehen',
 };
 
-/// Number of consecutive days up to and including today that have at least
-/// one entry (of any status — a recorded day counts even before it's
-/// analyzed). 0 if today has no entry yet.
-int currentStreak(List<JournalEntry> entries) {
-  final days = entries
-      .map((e) => DateTime(e.day.year, e.day.month, e.day.day))
-      .toSet();
-  var streak = 0;
-  var cursor = DateTime.now();
-  cursor = DateTime(cursor.year, cursor.month, cursor.day);
-  while (days.contains(cursor)) {
-    streak++;
-    // Calendar arithmetic, not `Duration(days: 1)`: stepping back across the
-    // October DST change with a Duration lands on 01:00 of the previous day,
-    // which never matches the midnight-normalised set — the streak would
-    // silently stop there once a year.
-    cursor = DateTime(cursor.year, cursor.month, cursor.day - 1);
+/// Average mood over a window of recent days, and over the same-length
+/// window right before it — "how have I been lately, and is it getting
+/// better". Null fields when a window holds no scored entry.
+class RecentMood {
+  final double? current;
+  final double? previous;
+  RecentMood(this.current, this.previous);
+
+  /// Positive when the recent window is better than the one before.
+  double? get change =>
+      current == null || previous == null ? null : current! - previous!;
+}
+
+/// [RecentMood] for the last [days] days including today, against the
+/// [days] before. Calendar arithmetic, not `Duration`, so a DST change
+/// doesn't shift a window boundary by an hour.
+RecentMood recentMood(List<JournalEntry> entries, {int days = 30}) {
+  final now = DateTime.now();
+  final today = DateTime(now.year, now.month, now.day);
+  final start = DateTime(today.year, today.month, today.day - days + 1);
+  final before = DateTime(today.year, today.month, today.day - 2 * days + 1);
+  final current = <double>[];
+  final previous = <double>[];
+  for (final e in entries) {
+    final score = e.moodScore;
+    if (score == null) continue;
+    final day = DateTime(e.day.year, e.day.month, e.day.day);
+    if (day.isAfter(today)) continue;
+    if (!day.isBefore(start)) {
+      current.add(score);
+    } else if (!day.isBefore(before)) {
+      previous.add(score);
+    }
   }
-  return streak;
+  double? avg(List<double> xs) =>
+      xs.isEmpty ? null : xs.reduce((a, b) => a + b) / xs.length;
+  return RecentMood(avg(current), avg(previous));
 }

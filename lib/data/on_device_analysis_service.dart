@@ -43,7 +43,7 @@ bereits transkribierte Tagebuch des Nutzers. Antworte AUSSCHLIESSLICH mit
 einem JSON-Objekt, keine anderen Worte, kein Markdown, keine Code-Fences.
 
 Format exakt so (Zahlen ohne Anführungszeichen):
-{"title":"...","summary":"...","moodLabel":"...","moodScore":0.0,"dimensions":{"positivity":0,"energy":0,"calm":0,"stress":0,"focus":0,"social":0},"tags":["..."]}
+{"title":"...","summary":"...","moodLabel":"...","moodScore":0.0,"dimensions":{"positivity":0,"energy":0,"calm":0,"stress":0,"focus":0,"social":0},"tags":["..."],"people":["..."]}
 
 Regeln:
 - title: 2-5 Wörter, was den Tag ausgemacht hat (z.B. "Strandtag mit Lena",
@@ -53,6 +53,7 @@ Regeln:
 - moodScore: 0.0 (sehr schlecht) bis 10.0 (großartig).
 - dimensions: jede Dimension 0 bis 100.
 - tags: 3 bis 5 kurze deutsche Substantive.
+- $kPeoplePromptRule
 
 Transkript:
 ''';
@@ -125,6 +126,7 @@ Transkript:
               .where((t) => t.isNotEmpty)
               .toList() ??
           const [],
+      people: cleanPeople(data['people']),
       model: modelName,
       source: source,
     );
