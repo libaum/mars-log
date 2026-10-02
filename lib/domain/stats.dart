@@ -446,3 +446,42 @@ RecentMood recentMood(List<JournalEntry> entries, {int days = 30}) {
       xs.isEmpty ? null : xs.reduce((a, b) => a + b) / xs.length;
   return RecentMood(avg(current), avg(previous));
 }
+
+/// How much a recent mention counts against one long ago, for the people
+/// suggested when adding someone to an entry by hand.
+const kPeopleRecentWeight = 3;
+const kPeopleRecentDays = 14;
+
+/// Everyone ever mentioned, most likely first: who came up in the last
+/// [kPeopleRecentDays] days counts [kPeopleRecentWeight] times — someone
+/// you saw yesterday is a better guess than someone mentioned often a year
+/// ago.
+List<String> suggestedPeople(
+  Iterable<JournalEntry> entries,
+  PeopleAliases aliases, {
+  DateTime? now,
+  int recentWeight = kPeopleRecentWeight,
+}) {
+  final today = now ?? DateTime.now();
+  final since = DateTime(today.year, today.month, today.day)
+      .subtract(const Duration(days: kPeopleRecentDays));
+  final total = <String, int>{};
+  final recent = <String, int>{};
+  final shown = <String, String>{};
+  for (final e in entries) {
+    final isRecent = !e.day.isBefore(since);
+    for (final name in effectivePeople(e, aliases)) {
+      final key = name.toLowerCase();
+      shown.putIfAbsent(key, () => name);
+      total[key] = (total[key] ?? 0) + 1;
+      if (isRecent) recent[key] = (recent[key] ?? 0) + 1;
+    }
+  }
+  int score(String k) => (recent[k] ?? 0) * recentWeight + total[k]!;
+  final keys = total.keys.toList()
+    ..sort((a, b) {
+      final byScore = score(b).compareTo(score(a));
+      return byScore != 0 ? byScore : shown[a]!.compareTo(shown[b]!);
+    });
+  return [for (final k in keys) shown[k]!];
+}

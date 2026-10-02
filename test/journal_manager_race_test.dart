@@ -574,4 +574,39 @@ void main() {
       });
     });
   });
+
+  test('people by hand: remove with undo, add, and an extraction keeps both', () async {
+    await phone.run((journal, storage) async {
+      await journal.upsert(entry('a', transcript: 'Mit Lena und Tom.')..people = ['Lena', 'Tom']);
+      final engine = _Engine((t) => _result(transcript: t ?? ''))
+        ..people = ((_, _) => const [
+              PersonMention(person: 'Lena', mention: 'Lena', isNew: true),
+              PersonMention(person: 'Tom', mention: 'Tom', isNew: true),
+            ])
+        ..gate.complete();
+      final manager = _manager(journal, storage, engine);
+      List<String> shown() => effectivePeople(journal.byId('a')!, journal.aliases);
+
+      final before = await manager.removePerson('a', 'Tom');
+      expect(shown(), ['Lena']);
+      await manager.restorePeople('a', before!);
+      expect(shown(), ['Lena', 'Tom'], reason: 'undo');
+
+      await manager.removePerson('a', 'Tom');
+      await manager.addPerson('a', 'Mia');
+      await manager.addPerson('a', 'mia'); // already there: no duplicate
+      expect(shown(), ['Lena', 'Mia']);
+
+      await manager.reanalyze(journal.byId('a')!);
+      expect(shown(), ['Lena', 'Mia'], reason: 'a re-extraction keeps the corrections');
+
+      await manager.addPerson('a', 'Tom'); // brought back by hand
+      expect(shown(), ['Lena', 'Tom', 'Mia']);
+      expect(journal.byId('a')!.peopleAdded, ['Mia']);
+
+      await manager.removePerson('a', 'Mia'); // only added by hand: no tombstone
+      expect(journal.byId('a')!.peopleAdded, isEmpty);
+      expect(journal.byId('a')!.peopleRemoved, isEmpty);
+    });
+  });
 }

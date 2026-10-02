@@ -565,12 +565,72 @@ class JournalManager {
     _refresh();
   }
 
+  // ── People by hand ────────────────────────────────────────────────────────
+  //
+  // Corrections live in the entry's override lists, never in the extracted
+  // names, so no later extraction undoes them — see effectivePeople.
+
+  /// Removes [person] (as shown) from the entry. Returns the override lists
+  /// as they were, for [restorePeople] (undo).
+  Future<PeopleOverrides?> removePerson(String id, String person) async {
+    final live = _repo.byId(id);
+    if (live == null) return null;
+    final before = (added: live.peopleAdded, removed: live.peopleRemoved);
+    final aliases = _repo.aliases;
+    final key = aliases.canonical(person).toLowerCase();
+    bool isThem(String name) => aliases.canonical(name).toLowerCase() == key;
+    final extracted = [for (final p in live.people ?? const <String>[]) if (isThem(p)) p];
+    live.peopleAdded = [for (final p in live.peopleAdded) if (!isThem(p)) p];
+    if (extracted.isNotEmpty) {
+      // The spellings as extracted and the name as shown: whichever a later
+      // extraction writes, the person stays removed.
+      final tombstones = {...live.peopleRemoved, ...extracted, aliases.canonical(person)};
+      live.peopleRemoved = tombstones.toList();
+    }
+    await _repo.upsert(live);
+    _refresh();
+    return before;
+  }
+
+  /// Adds [person] to the entry by hand — or brings back one removed by hand.
+  Future<PeopleOverrides?> addPerson(String id, String person) async {
+    final name = person.trim();
+    final live = _repo.byId(id);
+    if (live == null || name.isEmpty) return null;
+    final before = (added: live.peopleAdded, removed: live.peopleRemoved);
+    final aliases = _repo.aliases;
+    final key = aliases.canonical(name).toLowerCase();
+    live.peopleRemoved = [
+      for (final r in live.peopleRemoved)
+        if (aliases.canonical(r).toLowerCase() != key) r,
+    ];
+    final shown = effectivePeople(live, aliases).map((p) => p.toLowerCase());
+    if (!shown.contains(key)) live.peopleAdded = [...live.peopleAdded, name];
+    await _repo.upsert(live);
+    _refresh();
+    return before;
+  }
+
+  /// Puts the entry's override lists back as they were (undo).
+  Future<void> restorePeople(String id, PeopleOverrides before) async {
+    final live = _repo.byId(id);
+    if (live == null) return;
+    live
+      ..peopleAdded = before.added
+      ..peopleRemoved = before.removed;
+    await _repo.upsert(live);
+    _refresh();
+  }
+
   /// Sets or clears the entry's location label (also works on old entries).
   Future<void> setPlace(JournalEntry entry, String? place) async {
     await _repo.setPlace(entry, place);
     _refresh();
   }
 }
+
+/// An entry's corrections by hand, as they were before an edit.
+typedef PeopleOverrides = ({List<String> added, List<String> removed});
 
 /// What a running entry is doing: transcription, then the analysis.
 enum AnalysisPhase { transcribing, analyzing }

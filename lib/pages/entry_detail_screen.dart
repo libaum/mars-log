@@ -12,6 +12,8 @@ import 'package:mars_log/logic/journal_manager.dart';
 import 'package:mars_log/pages/widgets/confirm_dialog.dart';
 import 'package:mars_log/pages/widgets/dimension_bar.dart';
 import 'package:mars_log/pages/widgets/double_tap_theme_toggle.dart';
+import 'package:mars_log/pages/widgets/people_sheet.dart';
+import 'package:mars_log/domain/people_aliases.dart';
 import 'package:mars_log/pages/widgets/recording_controls.dart';
 import 'package:mars_log/services/service_locator.dart';
 import 'package:mars_log/theme/theme_constants.dart';
@@ -61,6 +63,21 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
     _pullOffset.dispose();
     _player.dispose();
     super.dispose();
+  }
+
+  /// Tap on a person: gone at once, with a way back — no dialog.
+  Future<void> _removePerson(JournalEntry entry, String person) async {
+    final before = await _journal.removePerson(entry.id, person);
+    if (before == null || !mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(SnackBar(
+      content: Text('$person entfernt'),
+      action: SnackBarAction(
+        label: 'Rückgängig',
+        onPressed: () => _journal.restorePeople(entry.id, before),
+      ),
+    ));
   }
 
   Future<void> _togglePlay(JournalEntry entry, int index) async {
@@ -521,13 +538,22 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
         const SizedBox(height: 28),
       ],
 
-      if ((entry.people ?? const []).isNotEmpty) ...[
-        Text('MENSCHEN', style: TEXT_STYLE_LABEL),
-        const SizedBox(height: 10),
-        Text(_repo.aliases.apply(entry.people!).join(' · '),
-            style: TEXT_STYLE_BODY),
-        const SizedBox(height: 28),
-      ],
+      Text('MENSCHEN', style: TEXT_STYLE_LABEL),
+      const SizedBox(height: 12),
+      Wrap(
+        spacing: 10,
+        runSpacing: 10,
+        children: [
+          for (final person in effectivePeople(entry, _repo.aliases))
+            PersonChip(label: person, onTap: () => _removePerson(entry, person)),
+          PersonChip(
+            label: '+ Person',
+            faint: true,
+            onTap: () => showAddPeopleSheet(context, entry.id),
+          ),
+        ],
+      ),
+      const SizedBox(height: 28),
 
       if (entry.dimensions != null) ...[
         Text('STIMMUNG', style: TEXT_STYLE_LABEL),

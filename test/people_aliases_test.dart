@@ -60,4 +60,85 @@ void main() {
     expect(merged.allPeople.first, isA<MapEntry<String, int>>());
     expect(merged.allPeople.map((p) => p.key), ['Vincent', 'Lena']);
   });
+
+  test('suggestions: recent beats frequent long ago', () {
+    final now = DateTime(2026, 10, 2);
+    JournalEntry at(String id, DateTime day, List<String> people) => JournalEntry(
+          id: id,
+          createdAt: day,
+          day: day,
+          audioFileNames: const [],
+          people: people,
+        );
+    final entries = [
+      for (var i = 0; i < 5; i++) at('old$i', DateTime(2026, 1, i + 1), ['Oma']),
+      at('r1', DateTime(2026, 9, 30), ['Lena']),
+      at('r2', DateTime(2026, 10, 1), ['Lena']),
+      at('r3', DateTime(2026, 6, 1), ['Tom']),
+    ];
+    // Lena: 2 recent × 3 + 2 = 8; Oma: 5; Tom: 1.
+    expect(suggestedPeople(entries, const PeopleAliases(), now: now), ['Lena', 'Oma', 'Tom']);
+    expect(suggestedPeople(entries, const PeopleAliases(), now: now, recentWeight: 1),
+        ['Oma', 'Lena', 'Tom']);
+  });
+
+  test('overrides: removed stays out, added comes in, both through the aliases', () {
+    final aliases = const PeopleAliases().merge('Bruder', 'Vincent');
+    final e = _e('1', ['Bruder', 'Lena'], 5)
+      ..peopleRemoved = ['Lena']
+      ..peopleAdded = ['Mia', 'Vincent'];
+    expect(effectivePeople(e, aliases), ['Vincent', 'Mia']);
+  });
+
+  test('four names merged in one go, then split again: back where it started', () {
+    final entries = [
+      _e('1', ['Vincent'], 5),
+      _e('2', ['Wincent'], 5),
+      _e('3', ['Bruder', 'Lena'], 5),
+      _e('4', ['Vince'], 5),
+    ];
+    const original = PeopleAliases();
+    List<List<String>> shown(PeopleAliases a) =>
+        [for (final e in entries) effectivePeople(e, a)];
+
+    final merged = original.mergeAll(['Wincent', 'Bruder', 'Vince'], 'Vincent');
+    expect(shown(merged), [
+      ['Vincent'],
+      ['Vincent'],
+      ['Vincent', 'Lena'],
+      ['Vincent'],
+    ]);
+    expect(merged.aliasesOf('Vincent'), ['bruder', 'vince', 'wincent']);
+
+    var split = merged;
+    for (final alias in merged.aliasesOf('Vincent')) {
+      split = split.split(alias);
+    }
+    expect(shown(split), shown(original));
+    expect(split.aliasesOf('Vincent'), isEmpty);
+  });
+
+  test('the extraction learns new spellings but never undoes a split', () {
+    const known = ['Vincent'];
+    final learned = const PeopleAliases().learn(
+      const [PersonMention(person: 'Vincent', mention: 'Bruder', isNew: false)],
+      known,
+    );
+    expect(learned.canonical('Bruder'), 'Vincent');
+
+    final split = learned.split('bruder');
+    final again = split.learn(
+      const [PersonMention(person: 'Vincent', mention: 'Bruder', isNew: false)],
+      known,
+    );
+    expect(identical(again, split), isTrue);
+    expect(again.canonical('Bruder'), 'Bruder');
+
+    // New people and names not on the list teach nothing.
+    final none = const PeopleAliases().learn(const [
+      PersonMention(person: 'Lena', mention: 'Lenchen', isNew: true),
+      PersonMention(person: 'Nobody', mention: 'X', isNew: false),
+    ], known);
+    expect(none.map, isEmpty);
+  });
 }
