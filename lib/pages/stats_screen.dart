@@ -14,6 +14,7 @@ import 'package:mars_log/logic/journal_manager.dart';
 import 'package:mars_log/logic/location_service.dart';
 import 'package:mars_log/pages/entry_detail_screen.dart';
 import 'package:mars_log/pages/map_screen.dart';
+import 'package:mars_log/pages/widgets/all_people_sheet.dart';
 import 'package:mars_log/pages/widgets/dimension_bar.dart';
 import 'package:mars_log/pages/widgets/double_tap_theme_toggle.dart';
 import 'package:mars_log/pages/widgets/mood_map.dart';
@@ -849,13 +850,15 @@ class _StatsScreenState extends State<StatsScreen> {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      builder: (sheet) => _peopleList(
-        title: 'Namen',
-        hint: 'Tippen, um umzubenennen oder zusammenzuführen.',
+      builder: (sheet) => AllPeopleSheet(
         people: all.allPeople,
         onPick: (name) {
           Navigator.pop(sheet);
           _showPerson(all, name, primary);
+        },
+        onMerge: (names, into) {
+          Navigator.pop(sheet);
+          _saveAliases(all.aliases.mergeAll(names, into));
         },
       ),
     );
@@ -901,8 +904,17 @@ class _StatsScreenState extends State<StatsScreen> {
   /// One person: how their days felt (if there are enough), the names
   /// merged into them, and renaming / merging.
   void _showPerson(AllTimeStats all, String name, Color primary) {
-    final person = all.personMoods.where((p) => p.name == name).firstOrNull;
+    // By key: the list of all names and the mood ranking may spell one
+    // person differently ("lena" / "Lena").
+    final key = all.aliases.canonical(name).toLowerCase();
+    final person =
+        all.personMoods.where((p) => p.name.toLowerCase() == key).firstOrNull;
     final aliases = all.aliases.aliasesOf(name);
+    // How many entries name them this way — what a split takes along.
+    int entriesWith(String spelling) => all.entries
+        .where((e) => (e.people ?? const <String>[])
+            .any((p) => p.trim().toLowerCase() == spelling))
+        .length;
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -946,6 +958,8 @@ class _StatsScreenState extends State<StatsScreen> {
                 Row(
                   children: [
                     Expanded(child: Text(alias, style: TEXT_STYLE_BODY)),
+                    Text('${entriesWith(alias)}×', style: TEXT_STYLE_STATUS),
+                    const SizedBox(width: 8),
                     TextButton(
                       onPressed: () {
                         Navigator.pop(sheet);
