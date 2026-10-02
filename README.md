@@ -23,9 +23,9 @@ audio sent for transcription.
 
 ## Setup
 
-Transcription and analysis run on the phone: Whisper (downloaded on first
-use) and an open model, Gemma 4 E2B (~2.6 GB, downloaded on first use).
-No journal content goes to a cloud AI.
+Transcription and analysis run through the Gemini API (paid tier): set the
+API key in Settings. Recordings and transcripts go to Google for that; the
+audio stays on the phone as well.
 
 ## Install
 
@@ -39,7 +39,7 @@ No journal content goes to a cloud AI.
 - GetIt (dependency injection)
 - ValueNotifier + ValueListenableBuilder (state)
 - SharedPreferences + flutter_secure_storage (local & encrypted persistence)
-- `record` (audio) · Whisper via `whisper_ggml` (transcript) · Gemma 4 E2B via `flutter_gemma` (analysis) · `local_auth` (unlock)
+- `record` (audio) · Gemini API (transcript, analysis, people) · `connectivity_plus` (retry when back online) · `local_auth` (unlock)
 
 ## Design
 

@@ -4,11 +4,17 @@ This file provides guidance when working with code in this repository.
 
 ## Project Overview
 
-Mars Log is a voice journal. Open → tap the circle → talk → done. On stop, the audio is saved locally, transcribed on the phone by Whisper, and the transcript analysed on the phone by an open model (Gemma 4 E2B via `flutter_gemma`/LiteRT-LM) into summary, mood (label + 0–10 score + six 0–100 dimensions) and tags as JSON. No forms, no titles, no save button. Part of the Mars product family.
+Mars Log is a voice journal. Open → tap the circle → talk → done. On stop, the audio (AAC `.m4a`, 16 kHz mono, 64 kbps) is saved locally and sent to the **Gemini API** (paid tier) in three separate calls: transcription (audio → transcript), analysis (transcript → title, summary, mood label + 0–10 score + six 0–100 dimensions, tags) and people (transcript + the known people → who is mentioned). No forms, no titles, no save button. Part of the Mars product family.
 
-**AI stays on the device:** no journal content goes to a cloud AI (the Gemini API was removed 2026-09-24). The only network use is the optional E2E-encrypted sync hub, the one-time model downloads (Whisper ~470 MB, Gemma ~2.6 GB, both from Hugging Face), map tiles and Android's geocoder for place names. Gemini Nano was tried first and dropped: Google's API for it (ML Kit Prompt API) doesn't support the owner's Galaxy S24. The phone's analysis is the quick first pass; a better model on the laptop is meant to overwrite it later (`../PLAN_LOCAL_ANALYSIS.md`).
+**Cloud AI, deliberately:** on-device Whisper took 30–60 min per entry and the transcript went to Gemini anyway, so since 2026-10-02 Gemini does everything (Whisper, Gemma, Mistral and the hub's Ollama analysis were removed — they are in git history). Models are settings (`gemini_transcription_model` / `gemini_analysis_model`, default `gemini-3.8-flash`), the key is in secure storage. The audio stays on the phone (and in the export zip); the sync hub has no audio storage — that's a separate, later task.
 
-**Core principle:** the transcript is the permanent record; the interpretation (summary/mood/tags) is recomputable. Every entry records `analysisModel` + `analysisVersion`, and the detail screen offers "Neu analysieren". Audio is kept alongside the transcript but is *optional* — the "Audio nach Transkription löschen" setting discards it once `ready` (`audioDeleted` flag); re-analysis then runs from the transcript text (`AnalysisEngine.analyzeText`) instead of the audio. Each entry can also carry an optional recording location (`latitude`/`longitude` + editable `place` label). The analysis also names the **people** an entry mentions (`people`; null = analysed before the field existed, the hub fills it in), which feeds "Menschen × Stimmung" in the stats. The analysis sometimes spells one person several ways ("Bruder", "Vincent", "Wincent"): `PeopleAliases` (`lib/domain/people_aliases.dart`, `people.json`, sync item `people:aliases`, last-write-wins as a whole) maps them to one name, edited by hand in the stats (tap a person → Umbenennen / Ist dieselbe Person wie … / Trennen). Applied on read — entries keep the raw names, so a re-analysis doesn't undo it.
+**Core principle:** the transcript is the permanent record; the interpretation is recomputable. Every entry records `transcriptionModel`, `analysisModel` + `analysisVersion` (prompt version) and `peopleModel` + `peopleVersion`; the detail screen offers "Neu analysieren" / "Neu transkribieren". Audio is kept alongside the transcript but is *optional* — the "Audio nach Transkription löschen" setting discards it once `ready` (`audioDeleted`). Each entry can carry a recording location (`latitude`/`longitude` + editable `place`).
+
+**Pending, not lost:** a passing error (offline, timeout, 429, 5xx — `AnalysisException.transient`) parks the entry as `EntryStatus.pending`; `JournalManager` retries with backoff (30 s doubling to 30 min), at once when connectivity returns (`connectivity_plus`, in `main.dart`) and on every resume. Each step is skipped when its result is there, so a retry continues where it stopped. Recordings not yet transcribed are listed in `untranscribed` (device-local like the files; a sync purge turns them into entries of their own instead of deleting them). Pending entries don't sync until done. A rejected key / bad request → `failed`; saving a key retries failed entries.
+
+**People:** `people` holds the names *as the text says them* ("Bruder"); `PeopleAliases` (`lib/domain/people_aliases.dart`, `people.json`, sync item `people:aliases`, last-write-wins as a whole) maps spellings to one person and is applied on read, so merge/split are lossless. The extraction gets the known people + aliases in its prompt; when it matches a new spelling to a known person, the aliases learn it (`learn`) — never for a spelling split off by hand (a split is stored as a self-mapping). Corrections by hand are overrides in the **entry item** (not the analysis item), so every re-extraction keeps them: `peopleAdded`, `peopleRemoved` (tombstones: extracted spellings + shown name). Everything shown goes through `effectivePeople(entry, aliases)`. Settings → "Personen neu erkennen" backfills all entries below `kPeopleVersion` (idempotent; "Alle …" redoes every entry).
+
+**Self-rating:** `selfValence` / `selfArousal` (1–10, null = skipped, never defaulted), `selfRatedAt`, `selfRatingTiming` (`before`/`after` — Settings → Selbsteinschätzung, default after). Ground truth for calibrating the model's mood: it must never reach a prompt — the engine's calls take only text/audio, never the entry (tested in `journal_manager_race_test.dart` and the hub's `claude_insight_test.dart`).
 
 **Stats:** everything in `lib/domain/stats.dart` / `place_stats.dart` is plain computation, recomputed on every journal change — no AI. The one written evaluation over everything ("Auswertung", sync item `insight:all`, model `Insight` in `lib/domain/insight.dart`, stored in `insights.json` next to `entries.json`) is made on the laptop by the hub with Claude Code and only synced here. Places: grid cells within 400 m fold into the densest one, then clusters geocoded to the same "Stadt, Stadtteil" merge.
 
@@ -34,32 +40,31 @@ Managers expose state via `ValueNotifier`; UI subscribes with `ValueListenableBu
 |---|---|
 | `JournalRepository` | Owns `entries.json` + `audio/` in app documents dir; in-memory list, persisted on every mutation. Delete is a soft-delete (`deletedAt`); trashed entries are purged on load after `trashRetention` (30 days) |
 | `LocalStorageService` | SharedPreferences: theme + lock flags + analysis version + reminder + "delete audio after transcription" flag (non-sensitive) |
-| `SecureStorageService` | flutter_secure_storage: PIN hash (sha256); deletes the old Gemini API key on start |
-| `SelectedAnalysisEngine` (`AnalysisEngine`) | What `JournalManager` uses: transcription always Whisper; analysis by the `AnalysisProvider` chosen in Settings → "Analyse": Gemma on the phone, or — **text only** — `GeminiTextEngine` (`gemini-3.8-flash`, `thinkingLevel: low`) / `MistralTextEngine` (`mistral-large-2512`, EU), both on `CloudTextEngine` (shared prompts/schema, keys per provider in secure storage). **Gemini is the default** (nothing chosen yet). Offline or without a stored key, a cloud choice falls back to Gemma; a rejected key fails the entry. Results carry their `source` (`phone` / `cloud`) |
-| `OnDeviceAnalysisEngine` | Whisper `small` (`whisper_ggml`, model downloaded on first use) → transcript; `LocalLlm` (Gemma 4 E2B `.litertlm`, ungated on Hugging Face, installed via `flutter_gemma` on first use with a foreground download; GPU first, CPU fallback; context 4096) → summary/mood/dimensions/tags JSON, and the monthly recap (chunked). `kAnalysisVersion` 2 |
+| `SecureStorageService` | flutter_secure_storage: Gemini API key, PIN hash (sha256); deletes the old Mistral key on start |
+| `GeminiEngine` (`AnalysisEngine`) | `transcribe` (audio inline as base64 up to ~14 MB, above that the Files API with resumable upload, deleted afterwards; one call per recording; a cut-off answer — `finishReason` ≠ STOP — is an error), `analyzeText`, `extractPeople`, `summarizeMonth`. Plain `dart:io` `HttpClient`, key in the `x-goog-api-key` header, `thinkingLevel: low`. `kAnalysisVersion` 4, `kPeopleVersion` 1 |
 | `ExportService` | Zip export (`entries.json`, `location_history.json`, `audio/`) built on disk and copied into a SAF folder (manual "Export" and the daily backup); streamed import merges entries by id and restores missing audio |
-| `RecordingManager` | Microphone lifecycle; records WAV 16 kHz mono; timer |
+| `RecordingManager` | Microphone lifecycle; records AAC `.m4a` 16 kHz mono 64 kbps (~0.5 MB/min); timer |
 | `LocationService` | Best-effort GPS + reverse-geocoded label for a new entry; silent/nullable, never throws |
 | `NotificationManager` | Optional evening reminder; schedules a rolling window of one-shots, skipping days that already have a log |
 | `AnalysisTaskService` | Holds an Android foreground service (`flutter_foreground_task`, `dataSync`) for the duration of an analysis, so a backgrounded app isn't frozen mid-request. Ref-counted, no task handler — the work stays in the main isolate |
-| `JournalManager` | Core state: `entriesNotifier` + `trashNotifier`, `createFromAudio`, `reanalyze`, `delete` (soft, to trash), `restore`, `purge`, `emptyTrash`, `setDay`, `setPlace`, `resumePending` |
+| `JournalManager` | Core state: `entriesNotifier` + `trashNotifier`, `createFromAudio`, `appendRecording`, `reanalyze`, `resumePending` (+ backoff, `retryAt`), `backfillPeople`, `addPerson` / `removePerson` / `restorePeople`, `setSelfRating`, `delete` (soft, to trash), `restore`, `purge`, `emptyTrash`, `setDay`, `setPlace` |
 | `SettingsManager` | PIN/biometric toggles |
 | `LockManager` | Optional PIN/biometric gate; re-locks on app resume |
 | `ThemeManager` | Light/dark following system (Mars pattern) |
 
 ### Recording → analysis flow
-Tap stop → `RecordingManager.stop()` returns a `RecordingResult` → `JournalManager.createFromAudio` writes a provisional `analyzing` entry (UI shows a spinner) → best-effort `LocationService` stamp → `AnalysisEngine.analyzeAudio` (Whisper, then Gemma) → entry becomes `ready` (or `failed` with the audio kept for retry). On success, if the "delete audio after transcription" setting is on, the audio is discarded and `audioDeleted` set.
+Tap stop ("Senden") → `RecordingManager.stop()` returns a `RecordingResult` → `JournalManager.createFromAudio` writes a provisional `analyzing` entry (the recording in `untranscribed`) → the self-rating sheet opens (setting "after") → best-effort `LocationService` stamp → `_process`: transcribe (stored at once) → analyse → people → `ready`. A passing error → `pending` (retried), anything else → `failed`. On success, if "delete audio after transcription" is on, the audio is discarded.
 
-The whole analysis runs inside `AnalysisTaskService.run`, so Android keeps the process out of the cached/frozen bucket while Whisper and Gemma run. The transcript is stored as soon as Whisper is done, so a failed analysis never costs it. As a backstop, `JournalManager.resumePending()` runs on app start and on every resume and re-runs entries still stuck in `analyzing`, plus every `failed` one once per session.
+The whole run sits inside `AnalysisTaskService.run` (foreground service), so Android doesn't freeze the process mid-request. `resumePending()` runs on start, on every resume, on connectivity and from the backoff timer: `analyzing` leftovers, due `pending` ones, and each `failed` one once per session.
 
 ### Persistence
-`<appDocuments>/entries.json` (index) + `<appDocuments>/audio/<id>.wav`. Transcripts can be long, so entries live in a JSON file rather than SharedPreferences, which also makes export a simple directory zip. No backend/sync.
+`<appDocuments>/entries.json` (index) + `<appDocuments>/audio/<id>.m4a` (older entries: `.wav`). Transcripts can be long, so entries live in a JSON file rather than SharedPreferences, which also makes export a simple directory zip. No backend/sync.
 
 ## Project Structure
 ```
 lib/
-├── data/        # local_storage, secure_storage, journal_repository, analysis_engine, on_device_analysis_service, export_service
-├── domain/      # journal_entry (model + AnalysisResult + EntryStatus), mood (emoji/date helpers)
+├── data/        # local_storage, secure_storage, journal_repository, analysis_engine, gemini_engine, export_service
+├── domain/      # journal_entry (model + AnalysisResult + EntryStatus), people_aliases (aliases, effectivePeople, KnownPerson), stats, mood
 ├── logic/       # recording_manager, journal_manager, settings_manager, lock_manager, location_service, notification_manager
 ├── pages/       # main / entry_detail / settings / lock / about screens + widgets/
 ├── services/    # service_locator.dart
@@ -69,15 +74,16 @@ lib/
 
 ## Key Interactions
 - **Tap** the circle → start/stop recording (entry then analyzes itself)
-- **Tap** a timeline row → entry detail (playback, location label, transcript, summary, mood, tags, re-analyze, delete). Tap the date to backdate, tap the location to set/adjust the label.
-- **Swipe left/right** in the entry detail → next/previous day's entry (pager over all entries, oldest left). A drag that starts vertical locks the pager, so scrolling never wobbles sideways; **pull down** at the top closes the entry. At the bottom, the day's route from the location history (tap → fullscreen)
+- **Tap** a timeline row → entry detail (playback, location label, transcript, summary, mood, self-rating, tags, people, re-analyze, delete). Tap the date to backdate, the location to set/adjust the label, SELBST to (re)rate. People are pills: tap one → removed, with a „Rückgängig“ snackbar; „+ Person“ → sheet with suggestions (recent ×3 + total, `suggestedPeople`), search over names and aliases, „Neue Person …“; it stays open for several.
+- **Swipe left/right** in the entry detail → next/previous day's entry (`EntryPager`, oldest left). A drag that starts vertical locks the pager, so scrolling never wobbles sideways; the snap after a swipe is driven by `EntryPager` itself (PageView's ballistic snap makes the pages pointer-blind), and a touch during it lands the page and scrolls/swipes on at once; **pull down** at the top closes the entry. At the bottom, the day's route from the location history (tap → fullscreen)
 - **Long-press** a timeline row → selection mode: tap rows to (de)select, bottom bar offers "Alle"/"Keine" and "Kopieren" (transcripts of the picked days, oldest first, each under its date, joined by `---`, to the clipboard). Back or ✕ leaves the mode; swipe-to-delete is off while selecting.
 - **Swipe left** on a row → delete, moves to the trash (same gesture as mars_thoughts: arms with a haptic once pulled to the stop, red reveal, no confirm dialog)
 - **Long-press** the header/record area → Settings
 - **Double-tap** anywhere → toggle theme
 
 ## Setup notes
-- Settings → "Analyse-Modelle vorbereiten" downloads Whisper and Gemma (~3 GB) ahead of the first recording, with progress.
+- Settings → "Gemini API-Key" (Google AI Studio, with billing = paid tier, no training on the content). Without it every entry fails with a clear message and is retried once the key is saved.
+- Stats → MENSCHEN × STIMMUNG → "Alle Namen": long-press (or „Auswählen“) to pick several names → „Zusammenführen“ → main name (most mentioned preselected). Tap a person → aliases with entry counts, „Trennen“, „Umbenennen“.
 - Android: `RECORD_AUDIO` + `INTERNET` + `POST_NOTIFICATIONS` + `ACCESS_COARSE/FINE_LOCATION` permissions; `MainActivity` extends `FlutterFragmentActivity` (required by `local_auth`); `minSdk` 23. Location is requested at first recording and is optional — denial just leaves entries without a location.
 - AGP 8.11.1 / Kotlin 2.2.20 / Gradle 8.14, pinned below the rest of the Mars ecosystem (2026-09): originally because `share_plus` >=13 broke under AGP 9. `share_plus` is gone since 2026-09-25 (export no longer shares), so this can be revisited.
 
@@ -90,4 +96,4 @@ lib/
 Release currently uses debug signing (slim setup — no Play upload keystore yet).
 
 ## Not in V1 (future)
-Insights/statistics, calendar, tag filters, AI search, monthly/yearly reports, word stats, "on this day" memories, recording pause/waveform, larger Whisper model / laptop transcription, batch re-analysis on new `analysisVersion`, release infrastructure (keystore/fastlane/store assets).
+Calendar, tag filters, AI search, yearly reports, word stats, "on this day" memories, waveform, audio on the sync hub, splitting very long recordings, batch re-analysis on new `analysisVersion`, release infrastructure (keystore/fastlane/store assets).
