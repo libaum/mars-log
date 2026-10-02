@@ -120,6 +120,19 @@ class JournalEntry {
   /// then lives on the transcript alone; playback is unavailable.
   bool audioDeleted;
 
+  /// How the user rated themselves for this entry, 1..10 each — ground
+  /// truth to calibrate the model's mood against. Null: skipped, never a
+  /// default. Never part of any prompt.
+  ///
+  /// [selfValence]: "Wie geht's dir?" [selfArousal]: "Wie viel Energie hast
+  /// du?" (erschöpft ↔ energiegeladen). [selfRatingTiming]: asked
+  /// [kRatedBefore] or [kRatedAfter] the recording — kept per entry, so both
+  /// can be compared later.
+  int? selfValence;
+  int? selfArousal;
+  DateTime? selfRatedAt;
+  String? selfRatingTiming;
+
   /// Optional location where the entry was recorded. [place] is a human-readable
   /// label (reverse-geocoded, user-editable); the coordinates are kept for
   /// reference. All three may be null (permission denied, offline, old entry).
@@ -163,6 +176,10 @@ class JournalEntry {
     this.titleByHand = false,
     this.deletedAt,
     this.audioDeleted = false,
+    this.selfValence,
+    this.selfArousal,
+    this.selfRatedAt,
+    this.selfRatingTiming,
     this.latitude,
     this.longitude,
     this.place,
@@ -206,6 +223,10 @@ class JournalEntry {
         'titleByHand': titleByHand,
         'deletedAt': deletedAt?.toIso8601String(),
         'audioDeleted': audioDeleted,
+        'selfValence': selfValence,
+        'selfArousal': selfArousal,
+        'selfRatedAt': selfRatedAt?.toIso8601String(),
+        'selfRatingTiming': selfRatingTiming,
         'latitude': latitude,
         'longitude': longitude,
         'place': place,
@@ -321,6 +342,12 @@ class JournalEntry {
           ? null
           : DateTime.parse(json['deletedAt'] as String),
       audioDeleted: json['audioDeleted'] as bool? ?? false,
+      selfValence: json['selfValence'] as int?,
+      selfArousal: json['selfArousal'] as int?,
+      selfRatedAt: json['selfRatedAt'] == null
+          ? null
+          : DateTime.parse(json['selfRatedAt'] as String),
+      selfRatingTiming: json['selfRatingTiming'] as String?,
       latitude: (json['latitude'] as num?)?.toDouble(),
       longitude: (json['longitude'] as num?)?.toDouble(),
       place: json['place'] as String?,
@@ -330,6 +357,13 @@ class JournalEntry {
 
 List<String>? _people(Object? json) =>
     (json as List<dynamic>?)?.map((p) => p.toString()).toList();
+
+/// A self-rating: valence and arousal, 1..10 each.
+typedef SelfRating = ({int valence, int arousal});
+
+/// [JournalEntry.selfRatingTiming] values.
+const kRatedBefore = 'before';
+const kRatedAfter = 'after';
 
 /// Item-id suffix of an entry's analysis sync item.
 const kAnalysisItemSuffix = ':analysis';

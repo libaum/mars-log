@@ -13,6 +13,7 @@ import 'package:mars_log/pages/widgets/confirm_dialog.dart';
 import 'package:mars_log/pages/widgets/dimension_bar.dart';
 import 'package:mars_log/pages/widgets/double_tap_theme_toggle.dart';
 import 'package:mars_log/pages/widgets/people_sheet.dart';
+import 'package:mars_log/pages/widgets/self_rating_sheet.dart';
 import 'package:mars_log/domain/people_aliases.dart';
 import 'package:mars_log/pages/widgets/recording_controls.dart';
 import 'package:mars_log/services/service_locator.dart';
@@ -63,6 +64,15 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
     _pullOffset.dispose();
     _player.dispose();
     super.dispose();
+  }
+
+  Future<void> _rateSelf(JournalEntry entry) async {
+    final v = entry.selfValence, a = entry.selfArousal;
+    final rating = await showSelfRatingSheet(
+      context,
+      initial: v == null || a == null ? null : (valence: v, arousal: a),
+    );
+    if (rating != null) await _journal.setSelfRating(entry.id, rating);
   }
 
   /// Tap on a person: gone at once, with a way back — no dialog.
@@ -507,6 +517,28 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
             Text('${entry.moodScore!.toStringAsFixed(1)} / 10',
                 style: TEXT_STYLE_SCORE.copyWith(fontSize: 24)),
         ],
+      ),
+      const SizedBox(height: 28),
+
+      // The user's own rating — not the model's; tap to set or change it.
+      GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () => _rateSelf(entry),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('SELBST', style: TEXT_STYLE_LABEL),
+            const SizedBox(height: 10),
+            Text(
+              entry.selfValence == null
+                  ? 'Nicht eingeschätzt · tippen zum Nachtragen'
+                  : 'Befinden ${entry.selfValence} · Energie ${entry.selfArousal}',
+              style: entry.selfValence == null
+                  ? TEXT_STYLE_STATUS
+                  : TEXT_STYLE_BODY,
+            ),
+          ],
+        ),
       ),
       const SizedBox(height: 28),
 

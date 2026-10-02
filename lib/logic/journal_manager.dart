@@ -103,8 +103,16 @@ class JournalManager {
   // laptop's edit with a fresh stamp, and that stale version would then win
   // on every device.
 
+  /// A rating given before the recording started ("before" setting), for
+  /// the entry the next recording creates.
+  SelfRating? ratingForNextRecording;
+
   /// Creates a provisional (analyzing) entry immediately, then processes it.
+  /// The entry is in the repository when this returns its future — before
+  /// any await — so a rating can be set on it right away.
   Future<void> createFromAudio(RecordingResult rec) async {
+    final rating = ratingForNextRecording;
+    ratingForNextRecording = null;
     final entry = JournalEntry(
       id: rec.id,
       createdAt: rec.createdAt,
@@ -112,6 +120,10 @@ class JournalManager {
       audioFileNames: [rec.fileName],
       untranscribed: [rec.fileName],
       status: EntryStatus.analyzing,
+      selfValence: rating?.valence,
+      selfArousal: rating?.arousal,
+      selfRatedAt: rating == null ? null : DateTime.now(),
+      selfRatingTiming: rating == null ? null : kRatedBefore,
     );
     await _repo.upsert(entry);
     _refresh();
@@ -562,6 +574,20 @@ class JournalManager {
   /// Moves an entry to a different day (e.g. backdating). Re-sorts the timeline.
   Future<void> setDay(JournalEntry entry, DateTime day) async {
     await _repo.setDay(entry, day);
+    _refresh();
+  }
+
+  /// Sets the entry's self-rating. [timing] only for a first rating: a
+  /// rating changed later keeps when it was first asked.
+  Future<void> setSelfRating(String id, SelfRating rating, {String timing = kRatedAfter}) async {
+    final live = _repo.byId(id);
+    if (live == null) return;
+    live
+      ..selfValence = rating.valence
+      ..selfArousal = rating.arousal
+      ..selfRatedAt = DateTime.now()
+      ..selfRatingTiming ??= timing;
+    await _repo.upsert(live);
     _refresh();
   }
 

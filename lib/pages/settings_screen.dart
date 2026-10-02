@@ -387,6 +387,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     !_storage.getDeleteAudioAfterTranscription(),
                   ),
                 ),
+                _navRow(
+                  'Selbsteinschätzung',
+                  trailing: _storage.getSelfRatingTiming() == kRatedBefore ? 'Vorher' : 'Nachher',
+                  onTap: () async {
+                    await _storage.setSelfRatingTiming(
+                      _storage.getSelfRatingTiming() == kRatedBefore ? kRatedAfter : kRatedBefore,
+                    );
+                    setState(() {});
+                  },
+                ),
                 FutureBuilder<String?>(
                   future: _secure.getApiKey(),
                   builder: (context, snap) => _navRow(

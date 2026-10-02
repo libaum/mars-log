@@ -85,6 +85,12 @@ class LocalStorageService {
   Future<void> setMonthReview(String monthKey, String text) =>
       _prefs.setString('$_keyMonthReviewPrefix$monthKey', text);
 
+  /// When to ask for the self-rating: kRatedAfter (default) or
+  /// kRatedBefore the recording.
+  String getSelfRatingTiming() => _prefs.getString('self_rating_timing') ?? 'after';
+  Future<void> setSelfRatingTiming(String timing) =>
+      _prefs.setString('self_rating_timing', timing);
+
   /// The Gemini models — Settings → Modell. Null: the default
   /// (kDefaultTranscriptionModel / kDefaultAnalysisModel).
   String? getTranscriptionModel() => _prefs.getString('gemini_transcription_model');

@@ -2,7 +2,10 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'dart:convert';
+
 import 'package:mars_log/data/analysis_engine.dart';
+import 'package:mars_log/data/gemini_engine.dart';
 import 'package:mars_log/data/journal_repository.dart';
 import 'package:mars_log/data/local_storage_service.dart';
 import 'package:mars_log/domain/analysis_basis.dart';
@@ -81,7 +84,7 @@ AnalysisResult _result({
 JournalManager _manager(
   JournalRepository journal,
   LocalStorageService storage,
-  _Engine engine,
+  AnalysisEngine engine,
 ) {
   getIt
     ..registerSingleton<JournalRepository>(journal)
@@ -607,6 +610,107 @@ void main() {
       await manager.removePerson('a', 'Mia'); // only added by hand: no tombstone
       expect(journal.byId('a')!.peopleAdded, isEmpty);
       expect(journal.byId('a')!.peopleRemoved, isEmpty);
+    });
+  });
+
+  group('self-rating', () {
+    test('before: given to the new entry; after: set on it; skipped: null', () async {
+      await phone.run((journal, storage) async {
+        final engine = _Engine((t) => _result(transcript: t ?? 'gehört'))..gate.complete();
+        final manager = _manager(journal, storage, engine);
+        await phone.audio('1.m4a').create(recursive: true);
+        await phone.audio('2.m4a').create(recursive: true);
+        await phone.audio('3.m4a').create(recursive: true);
+
+        manager.ratingForNextRecording = (valence: 7, arousal: 3);
+        await manager.createFromAudio(
+            RecordingResult(id: '1', fileName: '1.m4a', createdAt: DateTime.now()));
+        var e = journal.byId('1')!;
+        expect((e.selfValence, e.selfArousal, e.selfRatingTiming), (7, 3, kRatedBefore));
+        expect(e.selfRatedAt, isNotNull);
+        expect(manager.ratingForNextRecording, isNull, reason: 'used once');
+
+        final run = manager.createFromAudio(
+            RecordingResult(id: '2', fileName: '2.m4a', createdAt: DateTime.now()));
+        await manager.setSelfRating('2', (valence: 4, arousal: 8)); // while it processes
+        await run;
+        e = journal.byId('2')!;
+        expect((e.selfValence, e.selfArousal, e.selfRatingTiming), (4, 8, kRatedAfter));
+        expect(e.status, EntryStatus.ready);
+
+        await manager.createFromAudio(
+            RecordingResult(id: '3', fileName: '3.m4a', createdAt: DateTime.now()));
+        e = journal.byId('3')!;
+        expect((e.selfValence, e.selfArousal, e.selfRatingTiming), (null, null, null));
+
+        // Changed later: keeps when it was first asked.
+        await manager.setSelfRating('1', (valence: 9, arousal: 9));
+        expect(journal.byId('1')!.selfRatingTiming, kRatedBefore);
+        expect(JournalEntry.fromJson(journal.byId('1')!.toJson()).selfValence, 9);
+      });
+    });
+
+    test('the rating never reaches the model', () async {
+      final bodies = <String>[];
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(server.close);
+      server.listen((req) async {
+        final body = await utf8.decodeStream(req);
+        bodies.add(body);
+        final prompt = jsonEncode(jsonDecode(body));
+        final Object answer = prompt.contains('inline_data')
+            ? 'Heute war ein guter Tag.'
+            : prompt.contains('Menschen')
+                ? jsonEncode({'people': []})
+                : jsonEncode({
+                    'title': 'Guter Tag',
+                    'summary': 'Gut.',
+                    'moodLabel': 'Gut',
+                    'moodScore': 7,
+                    'dimensions': {},
+                    'tags': [],
+                  });
+        req.response
+          ..headers.contentType = ContentType.json
+          ..write(jsonEncode({
+            'candidates': [
+              {
+                'content': {
+                  'parts': [
+                    {'text': answer},
+                  ],
+                },
+                'finishReason': 'STOP',
+              },
+            ],
+          }));
+        await req.response.close();
+      });
+
+      await phone.run((journal, storage) async {
+        final engine = GeminiEngine(
+          apiKey: () async => 'k',
+          transcriptionModelId: () => 'm',
+          analysisModelId: () => 'm',
+          base: Uri.parse('http://127.0.0.1:${server.port}/'),
+        );
+        final manager = _manager(journal, storage, engine);
+        await phone.audio('1.m4a').writeAsBytes([1, 2, 3]);
+        manager.ratingForNextRecording = (valence: 7, arousal: 3);
+        await manager.createFromAudio(
+            RecordingResult(id: '1', fileName: '1.m4a', createdAt: DateTime.now()));
+        await manager.reanalyze(journal.byId('1')!);
+        expect(journal.byId('1')!.status, EntryStatus.ready);
+        expect(journal.byId('1')!.selfValence, 7);
+      });
+
+      expect(bodies, hasLength(5), reason: 'transcript, analysis, people, analysis, people');
+      for (final body in bodies) {
+        expect(body, isNot(contains('self')));
+        expect(body, isNot(contains('Selbst')));
+        expect(body, isNot(contains('valence')));
+        expect(body, isNot(contains('arousal')));
+      }
     });
   });
 }
