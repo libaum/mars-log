@@ -9,6 +9,9 @@ import 'package:workmanager/workmanager.dart';
 
 const _taskUniqueName = 'mars_log_location_tracking';
 
+/// How old a last-known position may be to stand in for a fresh fix.
+const _maxLastKnownAge = Duration(minutes: 30);
+
 /// Best-effort single GPS fix, appended to [LocationHistoryRepository].
 /// Silent on any failure (permission revoked, GPS off, timeout) — a missed
 /// fix is unremarkable, the next scheduled run tries again.
@@ -22,18 +25,37 @@ Future<void> captureLocationFix() async {
       return;
     }
 
-    final position = await Geolocator.getCurrentPosition(
-      locationSettings: const LocationSettings(
-        accuracy: LocationAccuracy.low,
-        timeLimit: Duration(seconds: 20),
-      ),
-    );
+    // Android hands background apps only a few fresh fixes an hour, so a
+    // one-shot request often times out. Then a recent last-known position
+    // (from any app) still beats an empty hour.
+    Position? position;
+    try {
+      position = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.low,
+          timeLimit: Duration(seconds: 60),
+        ),
+      );
+    } catch (_) {
+      final last = await Geolocator.getLastKnownPosition();
+      if (last != null &&
+          DateTime.now().difference(last.timestamp) <= _maxLastKnownAge) {
+        position = last;
+      }
+    }
+    if (position == null) return;
 
+    // The fix's own time — a last-known position may be older than now.
+    final timestamp = position.timestamp.toLocal();
     final repo = await LocationHistoryRepository.getInstance();
+    // Two runs can fall back to the same last-known fix; store it once.
+    if (repo.pointsForDay(timestamp).any((p) => p.timestamp == timestamp)) {
+      return;
+    }
     await repo.addPoint(DayLocationPoint(
       latitude: position.latitude,
       longitude: position.longitude,
-      timestamp: DateTime.now(),
+      timestamp: timestamp,
       source: LocationSource.tracked,
     ));
   } catch (_) {
