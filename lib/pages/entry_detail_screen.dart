@@ -12,6 +12,7 @@ import 'package:mars_log/logic/journal_manager.dart';
 import 'package:mars_log/pages/widgets/confirm_dialog.dart';
 import 'package:mars_log/pages/widgets/dimension_bar.dart';
 import 'package:mars_log/pages/widgets/double_tap_theme_toggle.dart';
+import 'package:mars_log/pages/widgets/entry_pager.dart';
 import 'package:mars_log/pages/widgets/people_sheet.dart';
 import 'package:mars_log/pages/widgets/self_rating_sheet.dart';
 import 'package:mars_log/domain/people_aliases.dart';
@@ -22,8 +23,8 @@ import 'package:mars_log/theme/theme_constants.dart';
 /// Full view of one entry: audio, transcript, summary, mood, tags.
 /// Reacts live to re-analysis via the journal's entriesNotifier.
 /// Swipe left/right to page to the next/previous day's entry; pull down at
-/// the top of an entry to close. Vertical scrolling locks the pager so a
-/// slightly diagonal drag doesn't make the page wobble sideways.
+/// the top of an entry to close. The pager ([EntryPager]) keeps swiping and
+/// scrolling apart — also right after a swipe.
 class EntryDetailScreen extends StatefulWidget {
   final String entryId;
   const EntryDetailScreen({super.key, required this.entryId});
@@ -36,9 +37,6 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
   final _journal = getIt<JournalManager>();
   final _repo = getIt<JournalRepository>();
   final _locations = getIt<LocationHistoryRepository>();
-  // Axis lock for the current touch: vertical drags disable the pager.
-  final _pagerLocked = ValueNotifier<bool>(false);
-  Offset _touchDelta = Offset.zero;
   // Pull-down-to-close state.
   final _pullOffset = ValueNotifier<double>(0);
   static const _closeThreshold = 110.0;
@@ -60,7 +58,6 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
   @override
   void dispose() {
     _pageController?.dispose();
-    _pagerLocked.dispose();
     _pullOffset.dispose();
     _player.dispose();
     super.dispose();
@@ -232,53 +229,34 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
     );
   }
 
-  /// Decides the gesture axis from the first few pixels of a touch: unless
-  /// the drag is clearly horizontal, the pager is switched off for it.
+  /// The pages, with pull-down-to-close on top: the pager's notifications
+  /// pass through on their way up, the pages' vertical ones drive the pull.
   Widget _pager(List<JournalEntry> pages) {
-    return Listener(
-      onPointerDown: (_) {
-        _touchDelta = Offset.zero;
-        _pagerLocked.value = false;
-      },
-      onPointerMove: (e) {
-        if (_pagerLocked.value) return;
-        _touchDelta += e.delta;
-        if (_touchDelta.distance > 6 &&
-            _touchDelta.dx.abs() < _touchDelta.dy.abs() * 2) {
-          _pagerLocked.value = true;
-        }
-      },
-      child: NotificationListener<ScrollNotification>(
-        onNotification: _onScroll,
-        child: ValueListenableBuilder<double>(
-          valueListenable: _pullOffset,
-          builder: (context, pull, child) =>
-              Transform.translate(offset: Offset(0, pull), child: child),
-          child: ValueListenableBuilder<bool>(
-            valueListenable: _pagerLocked,
-            builder: (context, locked, _) => PageView.builder(
-              physics: locked ? const NeverScrollableScrollPhysics() : null,
-              controller: _pageController,
-              itemCount: pages.length,
-              onPageChanged: (i) => _onPageChanged(pages, i),
-              findChildIndexCallback: (key) {
-                final i = pages.indexWhere(
-                    (e) => e.id == (key as ValueKey<String>).value);
-                return i < 0 ? null : i;
-              },
-              itemBuilder: (context, i) => KeyedSubtree(
-                key: ValueKey(pages[i].id),
-                child: _content(pages[i]),
-              ),
-            ),
+    return NotificationListener<ScrollNotification>(
+      onNotification: _onScroll,
+      child: ValueListenableBuilder<double>(
+        valueListenable: _pullOffset,
+        builder: (context, pull, child) =>
+            Transform.translate(offset: Offset(0, pull), child: child),
+        child: EntryPager(
+          controller: _pageController!,
+          itemCount: pages.length,
+          onPageChanged: (i) => _onPageChanged(pages, i),
+          findChildIndexCallback: (key) {
+            final i = pages.indexWhere(
+                (e) => e.id == (key as ValueKey<String>).value);
+            return i < 0 ? null : i;
+          },
+          pageKey: (i) => pages[i].id,
+          itemBuilder: (context, i, list) => KeyedSubtree(
+            key: ValueKey(pages[i].id),
+            child: _content(pages[i], list),
           ),
         ),
       ),
     );
   }
 
-  /// Pull-down-to-close: overscroll at the top moves the page down with the
-  /// finger; released far enough, the entry closes, otherwise it snaps back.
   bool _onScroll(ScrollNotification n) {
     if (n.metrics.axis != Axis.vertical) return false;
     if (n is OverscrollNotification &&
@@ -296,11 +274,12 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
     return false;
   }
 
-  Widget _content(JournalEntry entry) {
+  Widget _content(JournalEntry entry, ScrollController list) {
     final primary = Theme.of(context).colorScheme.primary;
     final analyzing = entry.status == EntryStatus.analyzing;
 
     return ListView(
+      controller: list,
       // Clamping, so pulling past the top reports overscroll (see _onScroll)
       // instead of bouncing.
       physics: const ClampingScrollPhysics(),
