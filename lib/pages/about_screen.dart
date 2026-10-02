@@ -43,9 +43,9 @@ class AboutScreen extends StatelessWidget {
                   ),
                   const SizedBox(height: 16),
                   const Text(
-                    'Recordings are transcribed and analyzed on this phone '
-                    '(Whisper, Gemma). No journal content goes to a cloud AI. '
-                    'Map data by OpenStreetMap contributors.',
+                    'Recordings are transcribed and analyzed by Google\'s Gemini '
+                    'API (paid tier: not used for training). The audio stays on '
+                    'this phone as well. Map data by OpenStreetMap contributors.',
                     style: TextStyle(fontSize: 13, fontWeight: FontWeight.w300, color: COLOR_SECONDARY, height: 1.5),
                   ),
                   const SizedBox(height: 32),

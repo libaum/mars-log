@@ -147,7 +147,7 @@ class AllTimeStats {
     final byKey = <String, List<JournalEntry>>{};
     final spellings = <String, Map<String, int>>{};
     for (final e in _scored) {
-      for (final name in aliases.apply(e.people ?? const [])) {
+      for (final name in effectivePeople(e, aliases)) {
         final key = name.toLowerCase();
         (byKey[key] ??= []).add(e);
         final s = spellings[key] ??= {};
@@ -189,7 +189,7 @@ class AllTimeStats {
     final counts = <String, int>{};
     final shown = <String, String>{};
     for (final e in entries) {
-      for (final name in aliases.apply(e.people ?? const [])) {
+      for (final name in effectivePeople(e, aliases)) {
         final key = name.toLowerCase();
         shown.putIfAbsent(key, () => name);
         counts[key] = (counts[key] ?? 0) + 1;
@@ -204,7 +204,8 @@ class AllTimeStats {
   /// section says so while a re-analysis is still catching up.
   late final double peopleCoverage = _scored.isEmpty
       ? 0
-      : _scored.where((e) => e.people != null).length / _scored.length;
+      : _scored.where((e) => (e.peopleVersion ?? 0) >= kPeopleVersion).length /
+          _scored.length;
 
   /// Average mood per weekday (`DateTime.monday`..`DateTime.sunday`).
   late final Map<int, double> moodByWeekday = _computeMoodByWeekday();

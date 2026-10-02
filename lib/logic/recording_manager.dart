@@ -14,8 +14,8 @@ class RecordingResult {
       {required this.id, required this.fileName, required this.createdAt});
 }
 
-/// Owns the microphone lifecycle. Records AAC in m4a, 16 kHz mono — Whisper's
-/// own sample rate; whisper_ggml converts it to WAV before transcribing.
+/// Owns the microphone lifecycle. Records AAC in m4a, 16 kHz mono, 64 kbps —
+/// plenty for speech, and small to upload (about 0.5 MB a minute).
 class RecordingManager {
   final _repo = getIt<JournalRepository>();
   final AudioRecorder _rec = AudioRecorder();

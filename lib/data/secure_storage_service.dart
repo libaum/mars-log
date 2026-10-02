@@ -2,10 +2,10 @@ import 'dart:convert';
 import 'package:crypto/crypto.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
-/// Encrypted storage for sensitive values: the cloud providers' API keys
-/// (the cloud analysis options) and the PIN hash.
+/// Encrypted storage for sensitive values: the Gemini API key and the PIN
+/// hash.
 class SecureStorageService {
-  static String _apiKeyName(String provider) => '${provider}_api_key';
+  static const _keyApiKey = 'gemini_api_key';
   static const _keyPinHash = 'pin_hash';
 
   final FlutterSecureStorage _storage;
@@ -15,13 +15,14 @@ class SecureStorageService {
           aOptions: AndroidOptions(encryptedSharedPreferences: true),
         );
 
-  /// [provider]: an AnalysisProvider name — `gemini`, `mistral`.
-  Future<String?> getApiKey(String provider) =>
-      _storage.read(key: _apiKeyName(provider));
+  Future<String?> getApiKey() => _storage.read(key: _keyApiKey);
 
-  Future<void> setApiKey(String provider, String key) => key.trim().isEmpty
-      ? _storage.delete(key: _apiKeyName(provider))
-      : _storage.write(key: _apiKeyName(provider), value: key.trim());
+  Future<void> setApiKey(String key) => key.trim().isEmpty
+      ? _storage.delete(key: _keyApiKey)
+      : _storage.write(key: _keyApiKey, value: key.trim());
+
+  /// The Mistral key from when Mistral could analyse — gone with it.
+  Future<void> deleteOldKeys() => _storage.delete(key: 'mistral_api_key');
 
   Future<bool> hasPin() async => (await _storage.read(key: _keyPinHash)) != null;
 

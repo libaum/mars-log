@@ -55,11 +55,15 @@ class EntryTile extends StatelessWidget {
                   children: [
                     Text(formatRelativeDate(entry.day), style: TEXT_STYLE_DATE),
                     const SizedBox(height: 4),
-                    // Listens to the phase: Whisper → model changes the
-                    // line without the entry itself changing.
-                    ValueListenableBuilder<Map<String, AnalysisPhase>>(
-                      valueListenable: getIt<JournalManager>().phases,
-                      builder: (context, _, _) => Text(
+                    // Listens to the phase (transcription → analysis) and
+                    // the next retry: both change the line without the
+                    // entry itself changing.
+                    ListenableBuilder(
+                      listenable: Listenable.merge([
+                        getIt<JournalManager>().phases,
+                        getIt<JournalManager>().retryAt,
+                      ]),
+                      builder: (context, _) => Text(
                         _subtitle(),
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
@@ -108,6 +112,8 @@ class EntryTile extends StatelessWidget {
         );
       case EntryStatus.failed:
         return Text('⚠', style: TextStyle(fontSize: 20, color: primary));
+      case EntryStatus.pending:
+        return Icon(Icons.schedule, size: 20, color: primary.withValues(alpha: 0.5));
       case EntryStatus.ready:
         return Text(moodEmoji(entry.moodScore), style: const TextStyle(fontSize: 24));
     }
@@ -121,6 +127,8 @@ class EntryTile extends StatelessWidget {
             : 'Wird analysiert …';
       case EntryStatus.failed:
         return entry.errorMessage ?? 'Analyse fehlgeschlagen';
+      case EntryStatus.pending:
+        return getIt<JournalManager>().pendingText(entry);
       case EntryStatus.ready:
         final title = entry.title?.trim();
         if (title != null && title.isNotEmpty) return title;

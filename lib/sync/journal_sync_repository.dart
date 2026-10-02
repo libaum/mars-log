@@ -41,8 +41,12 @@ class JournalSyncRepository implements SyncRepository {
       // An entry still being analyzed is half-made: its transcript is empty
       // and its status will flip within seconds. Pushing it would briefly
       // show a spinner-forever entry on the laptop. It goes out once ready
-      // or failed — that write stamps it anyway.
-      if (entry.status == EntryStatus.analyzing) continue;
+      // or failed — that write stamps it anyway. Same for one waiting for a
+      // connection: it is still the phone's to finish.
+      if (entry.status == EntryStatus.analyzing ||
+          entry.status == EntryStatus.pending) {
+        continue;
+      }
       final entryDue = since == null || !entry.changedAt.isBefore(since);
       if (entryDue) {
         items.add(

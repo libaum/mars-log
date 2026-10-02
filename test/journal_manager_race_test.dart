@@ -7,6 +7,7 @@ import 'package:mars_log/data/journal_repository.dart';
 import 'package:mars_log/data/local_storage_service.dart';
 import 'package:mars_log/domain/analysis_basis.dart';
 import 'package:mars_log/domain/journal_entry.dart';
+import 'package:mars_log/domain/people_aliases.dart';
 import 'package:mars_log/logic/analysis_task_service.dart';
 import 'package:mars_log/logic/journal_manager.dart';
 import 'package:mars_log/logic/location_service.dart';
@@ -23,8 +24,19 @@ class _Engine extends Fake implements AnalysisEngine {
   final AnalysisResult Function(String? transcriptIn) respond;
   _Engine(this.respond);
 
+  /// What [extractPeople] finds, and how often it ran.
+  List<PersonMention> Function(String transcript, List<KnownPerson> known) people =
+      (_, _) => const [];
+  int peopleCalls = 0;
+
   @override
   String get modelName => 'fake';
+
+  @override
+  String get transcriptionModel => 'fake-stt';
+
+  @override
+  String get source => AnalysisSource.cloud;
 
   @override
   Future<String> transcribe(List<File> audioFiles) async {
@@ -33,11 +45,13 @@ class _Engine extends Fake implements AnalysisEngine {
   }
 
   @override
-  Future<AnalysisResult> analyzeAudio(List<File> audioFiles) async =>
-      analyzeText(await transcribe(audioFiles));
+  Future<AnalysisResult> analyzeText(String transcript) async => respond(transcript);
 
   @override
-  Future<AnalysisResult> analyzeText(String transcript) async => respond(transcript);
+  Future<PeopleResult> extractPeople(String transcript, List<KnownPerson> known) async {
+    peopleCalls++;
+    return PeopleResult(people(transcript, known), model: 'fake');
+  }
 }
 
 class _NoLocation extends Fake implements LocationService {
@@ -108,8 +122,10 @@ void main() {
   tearDown(() => tmp.delete(recursive: true));
 
   test('a laptop edit made during a re-analysis on the phone survives it', () async {
-    await phone.run((journal, _) =>
-        journal.upsert(entry('a', transcript: 'alt')..tags = ['alt']));
+    await phone.run((journal, _) async {
+      await phone.audio('a.m4a').create(recursive: true);
+      await journal.upsert(entry('a', transcript: 'alt', audio: ['a.m4a'])..tags = ['alt']);
+    });
     await phone.sync(hub, key);
     await laptop.sync(hub, key);
 
@@ -275,64 +291,6 @@ void main() {
     });
   });
 
-  group('a laptop analysis of the same transcript', () {
-    Future<void> laptopAnalysed(JournalRepository journal) async {
-      await phone.audio('a.wav').create(recursive: true);
-      await journal.upsert(entry('a', transcript: 'alt', audio: ['a.wav']));
-      await journal.writeAnalysis(
-        'a',
-        _result(summary: 'vom Laptop'),
-        model: 'ollama:test',
-        version: 1,
-        source: AnalysisSource.laptop,
-        basis: transcriptBasis('alt'),
-      );
-    }
-
-    test('stays against an automatic on-device pass', () async {
-      await phone.run((journal, storage) async {
-        await laptopAnalysed(journal);
-        // Killed mid-analysis earlier, resumed now.
-        await journal.upsert(journal.byId('a')!..status = EntryStatus.analyzing);
-        final engine = _Engine((_) => _result(summary: 'vom Handy'))..gate.complete();
-        await _manager(journal, storage, engine).resumePending();
-
-        final e = journal.byId('a')!;
-        expect(e.summary, 'vom Laptop');
-        expect(e.status, EntryStatus.ready);
-      });
-    });
-
-    test('is replaced when "Neu analysieren" is pressed', () async {
-      await phone.run((journal, storage) async {
-        await laptopAnalysed(journal);
-        final engine = _Engine((_) => _result(summary: 'vom Handy'))..gate.complete();
-        await _manager(journal, storage, engine).reanalyze(journal.byId('a')!);
-        expect(journal.byId('a')!.summary, 'vom Handy');
-      });
-    });
-
-    test('is replaced by a cloud model, even automatically', () async {
-      await phone.run((journal, storage) async {
-        await laptopAnalysed(journal);
-        await journal.upsert(journal.byId('a')!..status = EntryStatus.analyzing);
-        final engine = _Engine((t) => AnalysisResult(
-              transcript: t ?? 'alt',
-              summary: 'von Gemini',
-              moodLabel: 'gut',
-              moodScore: 7,
-              dimensions: const {},
-              tags: const [],
-              source: AnalysisSource.cloud,
-            ))
-          ..gate.complete();
-        await _manager(journal, storage, engine).resumePending();
-        expect(journal.byId('a')!.summary, 'von Gemini');
-        expect(journal.byId('a')!.analysisSource, AnalysisSource.cloud);
-      });
-    });
-  });
-
   test('"Neu analysieren" works from the transcript, without Whisper', () async {
     await phone.run((journal, storage) async {
       await phone.audio('a.wav').create(recursive: true);
@@ -431,6 +389,189 @@ void main() {
         ..changedAt = held.changedAt.add(const Duration(seconds: 1));
       await journal.applySynced([remote], {});
       await expectLater(journal.upsert(held), throwsA(isA<AssertionError>()));
+    });
+  });
+
+  group('pending', () {
+    test('no connection: the entry waits, then finishes without transcribing twice',
+        () async {
+      await phone.run((journal, storage) async {
+        var offline = true;
+        var transcriptions = 0;
+        var analysisCalls = 0;
+        final engine = _Engine((text) {
+          if (text == null) {
+            transcriptions++;
+            return _result(transcript: 'gehört');
+          }
+          analysisCalls++;
+          if (offline) throw AnalysisException('Wartet auf Netz.', transient: true, offline: true);
+          return _result(transcript: text, summary: 'später');
+        })..gate.complete();
+        final manager = _manager(journal, storage, engine);
+        await phone.audio('1.m4a').create(recursive: true);
+
+        await manager.createFromAudio(
+          RecordingResult(id: '1', fileName: '1.m4a', createdAt: DateTime.now()),
+        );
+        var e = journal.byId('1')!;
+        expect(e.status, EntryStatus.pending);
+        expect(e.transcript, 'gehört', reason: 'the transcript is kept');
+        expect(e.untranscribed, isEmpty);
+        expect(e.transcriptionModel, 'fake-stt');
+        expect(manager.retryAt.value['1'], isNotNull);
+        expect(manager.pendingText(e), startsWith('Wartet auf Netz'));
+
+        // Not due yet: a plain resume leaves it alone.
+        await manager.resumePending();
+        expect(analysisCalls, 1);
+
+        offline = false;
+        await manager.resumePending(now: true); // the connection is back
+        e = journal.byId('1')!;
+        expect(e.status, EntryStatus.ready);
+        expect(e.summary, 'später');
+        expect(transcriptions, 1);
+        expect(manager.retryAt.value, isEmpty);
+      });
+    });
+
+    test('a recording appended offline is kept until transcribed', () async {
+      await phone.run((journal, storage) async {
+        await phone.audio('a.m4a').create(recursive: true);
+        await journal.upsert(entry('a', transcript: 'erster Teil', audio: ['a.m4a']));
+        var offline = true;
+        final engine = _Engine((text) {
+          if (text == null) {
+            if (offline) throw AnalysisException('Wartet auf Netz.', transient: true, offline: true);
+            return _result(transcript: 'zweiter Teil');
+          }
+          return _result(transcript: text);
+        })..gate.complete();
+        final manager = _manager(journal, storage, engine);
+        await phone.audio('b.m4a').create(recursive: true);
+
+        await manager.appendRecording(
+          journal.byId('a')!,
+          RecordingResult(id: 'b', fileName: 'b.m4a', createdAt: DateTime.now()),
+        );
+        expect(journal.byId('a')!.status, EntryStatus.pending);
+        expect(journal.byId('a')!.audioFileNames, ['a.m4a', 'b.m4a']);
+        expect(journal.byId('a')!.untranscribed, ['b.m4a']);
+
+        offline = false;
+        await manager.resumePending(now: true);
+        final e = journal.byId('a')!;
+        expect(e.status, EntryStatus.ready);
+        expect(e.transcript, 'erster Teil\n\nzweiter Teil');
+        expect(e.untranscribed, isEmpty);
+      });
+    });
+
+    test('a rejected key fails instead of waiting', () async {
+      await phone.run((journal, storage) async {
+        await journal.upsert(entry('a', transcript: 'text'));
+        final engine = _Engine((_) => throw AnalysisException('Key prüfen'))..gate.complete();
+        final manager = _manager(journal, storage, engine);
+        await manager.reanalyze(journal.byId('a')!);
+        expect(journal.byId('a')!.status, EntryStatus.failed);
+      });
+    });
+
+    test('backoff doubles up to half an hour', () {
+      expect(JournalManager.retryDelay(1), const Duration(seconds: 30));
+      expect(JournalManager.retryDelay(2), const Duration(minutes: 1));
+      expect(JournalManager.retryDelay(3), const Duration(minutes: 2));
+      expect(JournalManager.retryDelay(20), const Duration(minutes: 30));
+    });
+  });
+
+  group('people', () {
+    test('every new entry gets its people from their own call', () async {
+      await phone.run((journal, storage) async {
+        final engine = _Engine((text) => _result(transcript: text ?? 'Mit Lena.'))
+          ..people = ((_, _) => const [PersonMention(person: 'Lena', mention: 'Lena', isNew: true)])
+          ..gate.complete();
+        final manager = _manager(journal, storage, engine);
+        await phone.audio('1.m4a').create(recursive: true);
+        await manager.createFromAudio(
+          RecordingResult(id: '1', fileName: '1.m4a', createdAt: DateTime.now()),
+        );
+        final e = journal.byId('1')!;
+        expect(e.people, ['Lena']);
+        expect(e.peopleVersion, kPeopleVersion);
+        expect(e.peopleModel, 'fake');
+      });
+    });
+
+    test('a known person under another name: the aliases learn it, the entry keeps the mention',
+        () async {
+      await phone.run((journal, storage) async {
+        await journal.upsert(entry('old', transcript: '')..people = ['Vincent']);
+        await journal.upsert(entry('a', transcript: 'Mit meinem Bruder.'));
+        late List<KnownPerson> seen;
+        final engine = _Engine((t) => _result(transcript: t ?? ''))
+          ..people = (_, known) {
+            seen = known;
+            return const [PersonMention(person: 'Vincent', mention: 'Bruder', isNew: false)];
+          }
+          ..gate.complete();
+        final manager = _manager(journal, storage, engine);
+        await manager.backfillPeople(all: true);
+
+        expect(seen.map((k) => k.name), contains('Vincent'));
+        expect(journal.byId('a')!.people, ['Bruder']);
+        expect(journal.aliases.canonical('Bruder'), 'Vincent');
+        expect(effectivePeople(journal.byId('a')!, journal.aliases), ['Vincent']);
+      });
+    });
+
+    test('backfill: removed by hand stays removed, added by hand stays, no duplicates',
+        () async {
+      await phone.run((journal, storage) async {
+        await journal.upsert(entry('a', transcript: 'Mit Lena und Tom.')
+          ..people = ['Lena', 'Tom']
+          ..peopleRemoved = ['Tom']
+          ..peopleAdded = ['Mia']);
+        final engine = _Engine((t) => _result(transcript: t ?? ''))
+          ..people = ((_, _) => const [
+                PersonMention(person: 'Lena', mention: 'Lena', isNew: true),
+                PersonMention(person: 'Tom', mention: 'Tom', isNew: true),
+              ])
+          ..gate.complete();
+        final manager = _manager(journal, storage, engine);
+
+        expect(manager.peopleBackfillDue, 1);
+        final first = await manager.backfillPeople();
+        expect(first.done, 1);
+        expect(manager.peopleBackfillDue, 0);
+        expect(effectivePeople(journal.byId('a')!, journal.aliases), ['Lena', 'Mia']);
+
+        // Again, and again everything: nothing changes, nothing doubles.
+        await manager.backfillPeople();
+        await manager.backfillPeople(all: true);
+        expect(engine.peopleCalls, 2);
+        final e = journal.byId('a')!;
+        expect(e.people, ['Lena', 'Tom']);
+        expect(e.peopleRemoved, ['Tom']);
+        expect(e.peopleAdded, ['Mia']);
+        expect(effectivePeople(e, journal.aliases), ['Lena', 'Mia']);
+      });
+    });
+
+    test('a removal survives a re-extraction that spells the person differently', () async {
+      await phone.run((journal, storage) async {
+        final aliases = const PeopleAliases().merge('Vince', 'Vincent');
+        await journal.writeAliases(aliases);
+        await journal.upsert(entry('a', transcript: 'Mit Vincent.')
+          ..people = ['Vincent']
+          ..peopleRemoved = ['Vincent']);
+        final engine = _Engine((t) => _result(transcript: t ?? ''))
+          ..people = ((_, _) => const [PersonMention(person: 'Vincent', mention: 'Vince', isNew: false)])
+          ..gate.complete();
+        await _manager(journal, storage, engine).backfillPeople(all: true);
+        expect(effectivePeople(journal.byId('a')!, journal.aliases), isEmpty);
+      });
     });
   });
 }

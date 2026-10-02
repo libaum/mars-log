@@ -399,10 +399,24 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
               style: TEXT_STYLE_STATUS,
             ),
           ),
-          // Whisper is done: the transcript is there to read while the model
+          // Transcribed: the transcript is there to read while the model
           // works on the rest.
           if ((entry.transcript ?? '').isNotEmpty) ...[
             const SizedBox(height: 28),
+            Text('TRANSKRIPT', style: TEXT_STYLE_LABEL),
+            const SizedBox(height: 10),
+            Text(entry.transcript!, style: TEXT_STYLE_BODY),
+          ],
+        ] else if (entry.status == EntryStatus.pending) ...[
+          ValueListenableBuilder<Map<String, DateTime>>(
+            valueListenable: _journal.retryAt,
+            builder: (context, _, _) =>
+                Text(_journal.pendingText(entry), style: TEXT_STYLE_STATUS),
+          ),
+          const SizedBox(height: 28),
+          if (entry.moodScore != null)
+            ..._analysis(entry, primary)
+          else if ((entry.transcript ?? '').isNotEmpty) ...[
             Text('TRANSKRIPT', style: TEXT_STYLE_LABEL),
             const SizedBox(height: 10),
             Text(entry.transcript!, style: TEXT_STYLE_BODY),
@@ -534,7 +548,11 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
 
       if ((entry.analysisModel ?? '').isNotEmpty) ...[
         const SizedBox(height: 16),
-        Text(entry.analysisModel!,
+        Text(
+            {entry.transcriptionModel, entry.analysisModel}
+                .whereType<String>()
+                .where((m) => m.isNotEmpty)
+                .join(' · '),
             style: TEXT_STYLE_STATUS.copyWith(
                 color: primary.withValues(alpha: 0.4))),
       ],
@@ -544,7 +562,7 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
   Widget _actions(JournalEntry entry, bool analyzing) {
     final canTranscribe = !entry.audioDeleted && entry.audioFileNames.isNotEmpty;
     final reanalyzeButtons = [
-      // From the transcript: seconds, no Whisper.
+      // From the transcript: seconds, no new transcription.
       TextButton(
         onPressed: analyzing ? null : () => _journal.reanalyze(entry),
         child: const Text('Neu analysieren', style: TEXT_STYLE_SETTING),

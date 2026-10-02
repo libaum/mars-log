@@ -1,10 +1,9 @@
 import 'package:flutter/material.dart';
-import 'package:mars_log/data/cloud_engine.dart';
 import 'package:mars_log/data/export_service.dart';
 import 'package:mars_log/data/journal_repository.dart';
 import 'package:mars_log/data/google_timeline_import_service.dart';
 import 'package:mars_log/data/local_storage_service.dart';
-import 'package:mars_log/data/on_device_analysis_service.dart';
+import 'package:mars_log/data/gemini_engine.dart';
 import 'package:mars_log/data/secure_storage_service.dart';
 import 'package:mars_log/domain/journal_entry.dart';
 import 'package:mars_log/logic/daily_export_manager.dart';
@@ -42,9 +41,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final _timelineImport = getIt<GoogleTimelineImportService>();
   bool _importingTimeline = false;
   final _storage = getIt<LocalStorageService>();
-  final _onDevice = getIt<OnDeviceAnalysisEngine>();
   final _secure = getIt<SecureStorageService>();
-  bool _preparingModels = false;
 
   Future<void> _doExportToDisk() async {
     try {
@@ -172,77 +169,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
     setState(() {});
   }
 
-  AnalysisProvider get _provider =>
-      AnalysisProvider.byName(_storage.getAnalysisProvider());
-
-  static const _providerNotes = {
-    AnalysisProvider.device: 'Alles bleibt auf dem Handy. Schwächer.',
-    AnalysisProvider.gemini: 'Google. Nur der Text geht raus, die Aufnahme bleibt '
-        'hier. Bezahlte Stufe: kein Training mit deinen Texten.',
-    AnalysisProvider.mistral: 'Mistral (Paris), Daten in der EU. Nur der Text geht '
-        'raus. Im Mistral-Admin „Anonymous improvement data“ ausschalten.',
-  };
-
-  Future<void> _chooseProvider() async {
-    final chosen = await showDialog<AnalysisProvider>(
-      context: context,
-      builder: (context) => SimpleDialog(
-        title: const Text('Analyse', style: TEXT_STYLE_SETTING),
-        children: [
-          for (final p in AnalysisProvider.values)
-            SimpleDialogOption(
-              onPressed: () => Navigator.pop(context, p),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(p == _provider ? '● ${p.label}' : p.label, style: TEXT_STYLE_SETTING),
-                  const SizedBox(height: 2),
-                  Text(_providerNotes[p]!, style: TEXT_STYLE_SETTINGS_DESCRIPTION),
-                ],
-              ),
-            ),
-          const Padding(
-            padding: EdgeInsets.fromLTRB(24, 8, 24, 0),
-            child: Text(
-              'Transkribiert wird immer auf dem Handy (Whisper). Ohne Netz '
-              'analysiert Gemma.',
-              style: TEXT_STYLE_SETTINGS_DESCRIPTION,
-            ),
-          ),
-        ],
-      ),
-    );
-    if (chosen == null) return;
-    await _storage.setAnalysisProvider(chosen.name);
-    if (mounted) setState(() {});
-    if (chosen != AnalysisProvider.device &&
-        ((await _secure.getApiKey(chosen.name)) ?? '').isEmpty) {
-      await _editApiKey();
-    }
-  }
-
   Future<void> _editApiKey() async {
-    final provider = _provider;
-    if (provider == AnalysisProvider.device) return;
-    final controller =
-        TextEditingController(text: await _secure.getApiKey(provider.name) ?? '');
+    final controller = TextEditingController(text: await _secure.getApiKey() ?? '');
     if (!mounted) return;
     final result = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text('${provider.label} API-Key', style: TEXT_STYLE_SETTING),
+        title: const Text('Gemini API-Key', style: TEXT_STYLE_SETTING),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             TextField(controller: controller, autofocus: true),
             const SizedBox(height: 12),
-            Text(
-              provider == AnalysisProvider.gemini
-                  ? 'Aus Google AI Studio. Mit hinterlegter Zahlungsart nutzt '
-                      'Google deine Texte nicht zum Training — außerhalb der EU '
-                      'gilt das sonst nicht.'
-                  : 'Aus der Mistral-Konsole (console.mistral.ai → API Keys).',
+            const Text(
+              'Aus Google AI Studio. Mit hinterlegter Zahlungsart nutzt Google '
+              'deine Aufnahmen und Texte nicht zum Training — außerhalb der EU '
+              'gilt das sonst nicht.',
               style: TEXT_STYLE_SETTINGS_DESCRIPTION,
             ),
           ],
@@ -260,21 +203,79 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
     );
     if (result == null) return;
-    await _secure.setApiKey(provider.name, result);
+    await _secure.setApiKey(result);
+    if (mounted) setState(() {});
+    // Entries that failed for want of a key go now.
+    if (result.trim().isNotEmpty) _journal.retryFailed();
+  }
+
+  /// [transcription]: the transcription model, else the analysis model.
+  Future<void> _editModel({required bool transcription}) async {
+    final current = transcription
+        ? _storage.getTranscriptionModel() ?? kDefaultTranscriptionModel
+        : _storage.getAnalysisModel() ?? kDefaultAnalysisModel;
+    final controller = TextEditingController(text: current);
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(
+          transcription ? 'Modell: Transkription' : 'Modell: Analyse',
+          style: TEXT_STYLE_SETTING,
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(controller: controller, autofocus: true),
+            const SizedBox(height: 12),
+            Text(
+              'Gemini-Modell-ID. Leer: ${transcription ? kDefaultTranscriptionModel : kDefaultAnalysisModel}.',
+              style: TEXT_STYLE_SETTINGS_DESCRIPTION,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Abbrechen'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, controller.text),
+            child: const Text('Speichern'),
+          ),
+        ],
+      ),
+    );
+    if (result == null) return;
+    if (transcription) {
+      await _storage.setTranscriptionModel(result);
+    } else {
+      await _storage.setAnalysisModel(result);
+    }
     if (mounted) setState(() {});
   }
 
-  Future<void> _prepareOnDeviceModels() async {
-    setState(() => _preparingModels = true);
-    try {
-      await _onDevice.ensureWhisperModelDownloaded();
-      await _onDevice.ensureLlmReady();
-      _snack('Whisper und das Analysemodell sind bereit.');
-    } catch (e) {
-      _snack('Vorbereitung fehlgeschlagen: $e');
-    } finally {
-      if (mounted) setState(() => _preparingModels = false);
+  Future<void> _backfillPeople() async {
+    final due = _journal.peopleBackfillDue;
+    final all = due == 0;
+    if (all) {
+      final ok = await showConfirmDialog(
+        context,
+        title: 'Alle Personen neu erkennen?',
+        message: 'Alle Einträge sind schon mit der aktuellen Erkennung '
+            'ausgewertet. Noch einmal alle durchgehen? Was du von Hand '
+            'korrigiert hast, bleibt.',
+        confirmLabel: 'Neu erkennen',
+      );
+      if (!ok) return;
     }
+    final result = await _journal.backfillPeople(all: all);
+    if (!mounted) return;
+    _snack(result.failed == 0
+        ? '${result.done} Einträge ausgewertet.'
+        : '${result.done - result.failed} von ${result.total} ausgewertet, '
+            '${result.failed} fehlgeschlagen${result.lastError == null ? '' : ' (${result.lastError})'}.');
+    setState(() {});
   }
 
   Future<void> _pickReminderTime() async {
@@ -386,33 +387,41 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     !_storage.getDeleteAudioAfterTranscription(),
                   ),
                 ),
-                _navRow(
-                  'Analyse',
-                  trailing: _provider.label,
-                  onTap: _chooseProvider,
+                FutureBuilder<String?>(
+                  future: _secure.getApiKey(),
+                  builder: (context, snap) => _navRow(
+                    'Gemini API-Key',
+                    trailing: (snap.data ?? '').isEmpty ? 'Fehlt' : 'Gesetzt',
+                    onTap: _editApiKey,
+                  ),
                 ),
-                if (_provider != AnalysisProvider.device)
-                  FutureBuilder<String?>(
-                    future: _secure.getApiKey(_provider.name),
-                    builder: (context, snap) => _navRow(
-                      '${_provider.label} API-Key',
-                      trailing: (snap.data ?? '').isEmpty ? 'Fehlt' : 'Gesetzt',
-                      onTap: _editApiKey,
-                    ),
-                  ),
-                // Analysis runs on the phone (Whisper + Gemma); the first
-                // recording downloads both by itself (~3 GB), this just does
-                // it ahead of time, on Wi-Fi, with progress.
-                ValueListenableBuilder<int?>(
-                  valueListenable: _onDevice.llmProgress,
-                  builder: (context, progress, _) => _actionRow(
-                    progress != null
-                        ? 'Analysemodell wird geladen… $progress %'
-                        : _preparingModels
-                            ? 'Modelle werden vorbereitet…'
-                            : 'Analyse-Modelle vorbereiten (~3 GB)',
-                    _preparingModels ? () {} : _prepareOnDeviceModels,
-                  ),
+                _textRow(
+                  'Modell: Transkription',
+                  _storage.getTranscriptionModel() ?? kDefaultTranscriptionModel,
+                  () => _editModel(transcription: true),
+                ),
+                _textRow(
+                  'Modell: Analyse',
+                  _storage.getAnalysisModel() ?? kDefaultAnalysisModel,
+                  () => _editModel(transcription: false),
+                ),
+                ValueListenableBuilder<BackfillProgress?>(
+                  valueListenable: _journal.backfill,
+                  builder: (context, progress, _) {
+                    if (progress != null) {
+                      return _actionRow(
+                        'Personen werden erkannt… ${progress.done} / ${progress.total}',
+                        () {},
+                      );
+                    }
+                    final due = _journal.peopleBackfillDue;
+                    return _actionRow(
+                      due > 0
+                          ? 'Personen neu erkennen ($due Einträge)'
+                          : 'Alle Personen neu erkennen',
+                      _backfillPeople,
+                    );
+                  },
                 ),
                 _actionRow('Export', _doExportToDisk),
                 _actionRow('Import', _doImport),
@@ -523,6 +532,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
       confirmLabel: 'Verwerfen',
     );
     if (ok) await getIt<JournalRepository>().discardCorruptIndexes();
+  }
+
+  /// A setting whose value is too long for the trailing column.
+  Widget _textRow(String label, String value, VoidCallback onTap) {
+    return InkWell(
+      onTap: onTap,
+      splashColor: Colors.transparent,
+      highlightColor: Colors.transparent,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(40, 20, 50, 20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(label, style: TEXT_STYLE_SETTINGS_ITEM),
+            const SizedBox(height: 2),
+            Text(value, style: TEXT_STYLE_SETTINGS_DESCRIPTION),
+          ],
+        ),
+      ),
+    );
   }
 
   Widget _actionRow(String label, VoidCallback onTap) {

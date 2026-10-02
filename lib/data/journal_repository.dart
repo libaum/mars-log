@@ -548,7 +548,6 @@ class JournalRepository {
     if (!live.titleByHand && result.title.isNotEmpty) live.title = result.title;
     if (!live.summaryByHand) live.summary = result.summary;
     if (!live.tagsByHand) live.tags = result.tags;
-    if (result.people != null) live.people = result.people;
     live
       ..moodLabel = result.moodLabel
       ..moodScore = result.moodScore
@@ -573,15 +572,10 @@ class JournalRepository {
   /// [writeAnalysis]: the entry as stored now, its transcript still the one
   /// with [basis]; a title set by hand stays. The title is the analysis
   /// item's, so that item's clock moves; its source and model don't.
-  ///
-  /// [people], when given, is added the same way — for kept analyses from
-  /// before that field existed — and like the title only into a gap: people
-  /// an analysis already named stay.
   Future<bool> writeTitle(
     String id,
     String title, {
     required String basis,
-    List<String>? people,
   }) async {
     final live = byId(id);
     if (live == null || transcriptBasis(live.transcript) != basis) return false;
@@ -589,10 +583,8 @@ class JournalRepository {
     // Only fills a gap: an entry that already has a title keeps it.
     final newTitle =
         !live.titleByHand && trimmed.isNotEmpty && (live.title ?? '').isEmpty;
-    final newPeople = people != null && live.people == null;
-    if (!newTitle && !newPeople) return true;
-    if (newTitle) live.title = trimmed;
-    if (newPeople) live.people = people;
+    if (!newTitle) return true;
+    live.title = trimmed;
     await saveAnalysis(live, entryChanged: false);
     return true;
   }
@@ -681,8 +673,22 @@ class JournalRepository {
       final i = _entries.indexWhere((e) => e.id == entry.key);
       if (i < 0) continue;
       if (_entries[i].changedAt.isAfter(entry.value)) continue;
-      purged.add(_entries[i]);
-      _entries.removeAt(i);
+      final gone = _entries.removeAt(i);
+      // Recordings added here and not transcribed yet: the device that
+      // purged the entry never heard them. Each becomes an entry of its own
+      // instead of being deleted with the rest.
+      final rescued = [
+        for (final f in gone.untranscribed)
+          if (File(audioPath(f)).existsSync() && byId(_idOf(f)) == null) f,
+      ];
+      for (final f in rescued) {
+        _entries.add(_rescue(f));
+      }
+      purged.add(gone
+        ..audioFileNames = [
+          for (final f in gone.audioFileNames)
+            if (!rescued.contains(f)) f,
+        ]);
       changed = true;
     }
 
@@ -713,6 +719,8 @@ class JournalRepository {
       ..dimensions = local.dimensions
       ..tags = local.tags
       ..people = local.people
+      ..peopleModel = local.peopleModel
+      ..peopleVersion = local.peopleVersion
       ..analysisModel = local.analysisModel
       ..analysisVersion = local.analysisVersion
       ..analysisChangedAt = local.analysisChangedAt
@@ -732,6 +740,30 @@ class JournalRepository {
     }
   }
 
+  /// A recording's id: its file name without the extension
+  /// (RecordingManager names them so).
+  static String _idOf(String fileName) {
+    final dot = fileName.lastIndexOf('.');
+    return dot < 0 ? fileName : fileName.substring(0, dot);
+  }
+
+  /// A new entry for a recording whose entry is gone, waiting to be
+  /// transcribed — JournalManager picks it up.
+  static JournalEntry _rescue(String fileName) {
+    final id = _idOf(fileName);
+    final millis = int.tryParse(id);
+    final created =
+        millis == null ? DateTime.now() : DateTime.fromMillisecondsSinceEpoch(millis);
+    return JournalEntry(
+      id: id,
+      createdAt: created,
+      day: DateTime(created.year, created.month, created.day),
+      audioFileNames: [fileName],
+      untranscribed: [fileName],
+      status: EntryStatus.pending,
+    );
+  }
+
   /// Audio state belongs to the device that holds the files; sync carries it
   /// as metadata only, so an incoming version can be behind in either
   /// direction:
@@ -749,14 +781,34 @@ class JournalRepository {
   /// Synchronous file checks on purpose: [applySynced] must not yield between
   /// finding an entry's slot and replacing it.
   void _mergeAudio(JournalEntry local, JournalEntry incoming) {
+    // Still being worked on here — the remote copy can't know; the work in
+    // flight (or waiting for a connection) finishes it.
+    if (local.status == EntryStatus.analyzing || local.status == EntryStatus.pending) {
+      incoming
+        ..status = local.status
+        ..errorMessage = local.errorMessage;
+    }
+    // Recordings not transcribed yet exist only here, whatever the remote
+    // copy says: dropping them from the list would let the orphan sweep
+    // delete words nobody has heard yet.
+    final waiting = [
+      for (final f in local.untranscribed)
+        if (File(audioPath(f)).existsSync()) f,
+    ];
     if (local.audioDeleted) incoming.audioDeleted = true;
     if (incoming.audioDeleted) {
-      incoming.audioFileNames = [];
+      incoming
+        ..audioFileNames = waiting
+        ..untranscribed = waiting;
       return;
     }
     final holdsFiles =
         local.audioFileNames.any((f) => File(audioPath(f)).existsSync());
-    if (holdsFiles) incoming.audioFileNames = local.audioFileNames;
+    if (holdsFiles) {
+      incoming
+        ..audioFileNames = local.audioFileNames
+        ..untranscribed = waiting;
+    }
   }
 
   File get indexFile => File(_indexPath);

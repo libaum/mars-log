@@ -5,7 +5,7 @@ import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 /// Keeps the process alive while an analysis is in flight.
 ///
 /// Android moves a backgrounded app into the cached bucket and freezes it after
-/// a few seconds, which would stop a running Whisper transcription midway. A
+/// a few seconds, which would stop a running transcription request midway. A
 /// foreground service lifts the process out of that bucket for as long as it
 /// runs, so the transcription and analysis survive the app being sent to the
 /// background.

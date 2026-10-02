@@ -1,10 +1,11 @@
+import 'dart:async';
+
 import 'package:get_it/get_it.dart';
 import 'package:mars_log/data/analysis_engine.dart';
 import 'package:mars_log/data/export_service.dart';
-import 'package:mars_log/data/cloud_engine.dart';
 import 'package:mars_log/data/journal_repository.dart';
 import 'package:mars_log/data/local_storage_service.dart';
-import 'package:mars_log/data/on_device_analysis_service.dart';
+import 'package:mars_log/data/gemini_engine.dart';
 import 'package:mars_log/data/secure_storage_service.dart';
 import 'package:mars_log/logic/analysis_task_service.dart';
 import 'package:mars_log/logic/background_tasks.dart';
@@ -48,26 +49,16 @@ Future<void> setupServiceLocator() async {
   );
   getIt.registerSingleton<LocationService>(LocationService());
 
-  // Transcription is always Whisper on the phone; the analysis is Gemma on
-  // the phone or — if chosen in settings — Gemini from the transcript.
-  final onDevice = OnDeviceAnalysisEngine();
-  getIt.registerSingleton<OnDeviceAnalysisEngine>(onDevice);
+  // Transcription, analysis and people: Gemini. Models from Settings.
   final secure = getIt<SecureStorageService>();
   final storage = getIt<LocalStorageService>();
-  getIt.registerSingleton<AnalysisEngine>(SelectedAnalysisEngine(
-    onDevice: onDevice,
-    cloud: {
-      AnalysisProvider.gemini: GeminiTextEngine(
-        transcriber: onDevice,
-        apiKey: () => secure.getApiKey(AnalysisProvider.gemini.name),
-      ),
-      AnalysisProvider.mistral: MistralTextEngine(
-        transcriber: onDevice,
-        apiKey: () => secure.getApiKey(AnalysisProvider.mistral.name),
-      ),
-    },
-    provider: () => AnalysisProvider.byName(storage.getAnalysisProvider()),
+  unawaited(secure.deleteOldKeys());
+  getIt.registerSingleton<AnalysisEngine>(GeminiEngine(
+    apiKey: () => secure.getApiKey(),
+    transcriptionModelId: () => storage.getTranscriptionModel() ?? kDefaultTranscriptionModel,
+    analysisModelId: () => storage.getAnalysisModel() ?? kDefaultAnalysisModel,
   ));
+
 
   getIt.registerSingleton<ThemeManager>(ThemeManager());
   getIt.registerSingleton<SettingsManager>(SettingsManager());

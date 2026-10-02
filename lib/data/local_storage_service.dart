@@ -85,13 +85,17 @@ class LocalStorageService {
   Future<void> setMonthReview(String monthKey, String text) =>
       _prefs.setString('$_keyMonthReviewPrefix$monthKey', text);
 
-  /// Which model analyses entries (not the transcription — that's always
-  /// Whisper): an [AnalysisProvider] name. A new key: an old
-  /// 'analysis_engine' = 'cloud' meant *audio* to Gemini and must not switch
-  /// a cloud provider on by itself.
-  String? getAnalysisProvider() => _prefs.getString('analysis_provider');
-  Future<void> setAnalysisProvider(String name) =>
-      _prefs.setString('analysis_provider', name);
+  /// The Gemini models — Settings → Modell. Null: the default
+  /// (kDefaultTranscriptionModel / kDefaultAnalysisModel).
+  String? getTranscriptionModel() => _prefs.getString('gemini_transcription_model');
+  Future<void> setTranscriptionModel(String? id) => (id ?? '').trim().isEmpty
+      ? _prefs.remove('gemini_transcription_model')
+      : _prefs.setString('gemini_transcription_model', id!.trim());
+
+  String? getAnalysisModel() => _prefs.getString('gemini_analysis_model');
+  Future<void> setAnalysisModel(String? id) => (id ?? '').trim().isEmpty
+      ? _prefs.remove('gemini_analysis_model')
+      : _prefs.setString('gemini_analysis_model', id!.trim());
 
   /// Background location tracking: a few GPS fixes a day, independent of
   /// journal entries (see [LocationTrackingManager]).
