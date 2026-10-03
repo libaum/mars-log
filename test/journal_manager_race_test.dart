@@ -659,7 +659,7 @@ void main() {
         bodies.add(body);
         final prompt = jsonEncode(jsonDecode(body));
         final Object answer = prompt.contains('inline_data')
-            ? 'Heute war ein guter Tag.'
+            ? jsonEncode({'transcript': 'Heute war ein guter Tag.'})
             : prompt.contains('Menschen')
                 ? jsonEncode({'people': []})
                 : jsonEncode({

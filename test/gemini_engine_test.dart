@@ -35,6 +35,9 @@ class _FakeServer {
       jsonDecode(utf8.decode(requests[i].body)) as Map<String, dynamic>;
 }
 
+Map<String, Object> _transcript(String text, {String finish = 'STOP'}) =>
+    _reply(jsonEncode({'transcript': text}), finish: finish);
+
 Map<String, Object> _reply(String text, {String finish = 'STOP'}) => {
       'candidates': [
         {
@@ -82,7 +85,7 @@ void main() {
 
   test('transcription: the audio inline, with the transcription model and the key in a header',
       () async {
-    final fake = _FakeServer((req, _) => _answer(req, _reply('Heute war ich am See.')));
+    final fake = _FakeServer((req, _) => _answer(req, _transcript('Heute war ich am See.')));
     await fake.start();
     addTearDown(fake.server.close);
     final audio = await _audio(tmp, '1.m4a', 1000);
@@ -95,11 +98,15 @@ void main() {
     final parts = fake.json(0)['contents'][0]['parts'] as List<dynamic>;
     expect(parts[1]['inline_data']['mime_type'], 'audio/mp4');
     expect(base64Decode(parts[1]['inline_data']['data'] as String), audio.readAsBytesSync());
+    // JSON with a schema: notes the model writes in front can't end up in it.
+    final config = fake.json(0)['generationConfig'] as Map<String, dynamic>;
+    expect(config['responseMimeType'], 'application/json');
+    expect(config['responseSchema']['required'], ['transcript']);
   });
 
   test('several recordings: one call each, joined in order', () async {
     var n = 0;
-    final fake = _FakeServer((req, _) => _answer(req, _reply('Teil ${++n}')));
+    final fake = _FakeServer((req, _) => _answer(req, _transcript('Teil ${++n}')));
     await fake.start();
     addTearDown(fake.server.close);
     final text = await _engine(fake)
@@ -120,7 +127,7 @@ void main() {
       } else if (r.method == 'DELETE') {
         _answer(req, const {});
       } else {
-        _answer(req, _reply('Ein langer Eintrag.'));
+        _answer(req, _transcript('Ein langer Eintrag.'));
       }
     });
     await fake.start();
@@ -143,7 +150,7 @@ void main() {
   });
 
   test('a cut-off transcript is an error, never a short entry', () async {
-    final fake = _FakeServer((req, _) => _answer(req, _reply('Heute', finish: 'MAX_TOKENS')));
+    final fake = _FakeServer((req, _) => _answer(req, _transcript('Heute', finish: 'MAX_TOKENS')));
     await fake.start();
     addTearDown(fake.server.close);
     await expectLater(

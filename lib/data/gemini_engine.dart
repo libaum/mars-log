@@ -50,11 +50,11 @@ class GeminiEngine implements AnalysisEngine {
   static const _promptTranscribe = '''
 Transkribiere diese Sprachaufnahme wörtlich. Es ist ein gesprochener
 Tagebucheintrag, meist auf Deutsch, mit gelegentlichen englischen Wörtern.
-Gib nur den gesprochenen Text zurück: keine Überschrift, keine Zeitstempel,
-keine Sprecherangaben, keine Kommentare. Setze Satzzeichen und Absätze, wo
+Gib im Feld "transcript" nur den gesprochenen Text zurück: keine Überschrift,
+keine Zeitstempel, keine Sprecherangaben, keine Notizen, keine Kommentare. Setze Satzzeichen und Absätze, wo
 sie beim Sprechen hörbar sind. Füllwörter wie "äh" darfst du weglassen.
 Erfinde nichts dazu: Ist eine Stelle unverständlich, lass sie aus. Ist
-nichts zu verstehen, gib einen leeren Text zurück.''';
+nichts zu verstehen, lass "transcript" leer.''';
 
   static const _promptAnalysis = '''
 Du bist der Analyse-Assistent einer Sprach-Tagebuch-App. Unten steht ein
@@ -93,6 +93,17 @@ geforderten JSON.
 
 Zusammenfassungen:
 ''';
+
+  /// The transcript as a JSON field rather than plain text: with thinking on,
+  /// the model now and then wrote its notes in front of the transcript (ending
+  /// in a stray "thought"); constrained to this schema, nothing can.
+  static final Map<String, Object> transcriptSchema = {
+    'type': 'object',
+    'properties': {
+      'transcript': {'type': 'string'},
+    },
+    'required': ['transcript'],
+  };
 
   static final Map<String, Object> analysisSchema = {
     'type': 'object',
@@ -188,6 +199,8 @@ Zusammenfassungen:
           audio,
         ],
         {
+          'responseMimeType': 'application/json',
+          'responseSchema': geminiSchema(transcriptSchema),
           'temperature': 0,
           // A long recording is a long answer; the default cap would cut it.
           'maxOutputTokens': 65536,
@@ -196,7 +209,7 @@ Zusammenfassungen:
         // Long audio takes a while to transcribe.
         timeout: const Duration(minutes: 10),
       );
-      return _answerText(data).trim();
+      return ((_answerJson(data)['transcript'] as String?) ?? '').trim();
     } finally {
       // Google deletes uploads after 48 h by itself; no reason to wait.
       if (uploaded != null) unawaited(_deleteFile(key, uploaded));
@@ -324,6 +337,10 @@ $transcript''';
         'thinkingConfig': {'thinkingLevel': 'low'},
       },
     );
+    return _answerJson(data);
+  }
+
+  Map<String, dynamic> _answerJson(Map<String, dynamic> data) {
     final answer = _answerText(data);
     try {
       return jsonDecode(answer) as Map<String, dynamic>;
