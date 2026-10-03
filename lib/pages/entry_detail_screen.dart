@@ -15,6 +15,7 @@ import 'package:mars_log/pages/widgets/double_tap_theme_toggle.dart';
 import 'package:mars_log/pages/widgets/entry_pager.dart';
 import 'package:mars_log/pages/widgets/people_sheet.dart';
 import 'package:mars_log/pages/widgets/self_rating_sheet.dart';
+import 'package:mars_log/pages/widgets/transcript_section.dart';
 import 'package:mars_log/domain/people_aliases.dart';
 import 'package:mars_log/pages/widgets/recording_controls.dart';
 import 'package:mars_log/services/service_locator.dart';
@@ -409,9 +410,7 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
           // works on the rest.
           if ((entry.transcript ?? '').isNotEmpty) ...[
             const SizedBox(height: 28),
-            Text('TRANSKRIPT', style: TEXT_STYLE_LABEL),
-            const SizedBox(height: 10),
-            Text(entry.transcript!, style: TEXT_STYLE_BODY),
+            TranscriptSection(transcript: entry.transcript!),
           ],
         ] else if (entry.status == EntryStatus.pending) ...[
           ValueListenableBuilder<Map<String, DateTime>>(
@@ -423,9 +422,7 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
           if (entry.moodScore != null)
             ..._analysis(entry, primary)
           else if ((entry.transcript ?? '').isNotEmpty) ...[
-            Text('TRANSKRIPT', style: TEXT_STYLE_LABEL),
-            const SizedBox(height: 10),
-            Text(entry.transcript!, style: TEXT_STYLE_BODY),
+            TranscriptSection(transcript: entry.transcript!),
           ],
         ] else if (entry.status == EntryStatus.failed)
           Text(entry.errorMessage ?? 'Analyse fehlgeschlagen',
@@ -578,9 +575,7 @@ class _EntryDetailScreenState extends State<EntryDetailScreen> {
       ],
 
       if ((entry.transcript ?? '').isNotEmpty) ...[
-        Text('TRANSKRIPT', style: TEXT_STYLE_LABEL),
-        const SizedBox(height: 10),
-        Text(entry.transcript!, style: TEXT_STYLE_BODY),
+        TranscriptSection(transcript: entry.transcript!),
       ],
 
       if ((entry.analysisModel ?? '').isNotEmpty) ...[
