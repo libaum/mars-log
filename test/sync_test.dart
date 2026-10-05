@@ -14,10 +14,10 @@ import 'package:mars_log/sync/sync_purge_trace.dart';
 import 'package:mars_sync/mars_sync.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// Hub with the real hub's write rule (server-side LWW, one seq counter
+/// Relay with the real relay's write rule (server-side LWW, one seq counter
 /// across modules, rows per module). Same semantics as mars_sync's
 /// engine-test fake, minus the limits these tests don't exercise.
-class FakeHub {
+class FakeRelay {
   final _rows = <String, SyncItem>{};
   var _seq = 0;
 
@@ -43,7 +43,7 @@ class FakeHub {
     return PullResult(
       items: page,
       latestSeq: page.isEmpty ? sinceSeq : page.last.seq!,
-      hubId: 'hub',
+      relayId: 'relay',
       hasMore: false,
     );
   }
@@ -52,20 +52,20 @@ class FakeHub {
 }
 
 class FakeTransport implements SyncTransport {
-  final FakeHub hub;
+  final FakeRelay relay;
   final String deviceId;
-  FakeTransport(this.hub, this.deviceId);
+  FakeTransport(this.relay, this.deviceId);
 
   @override
   Future<String> whoami() async => deviceId;
 
   @override
   Future<void> push(String moduleId, List<SyncItem> items) async =>
-      hub.push(deviceId, items);
+      relay.push(deviceId, items);
 
   @override
   Future<PullResult> pull(String moduleId, {required int sinceSeq}) async =>
-      hub.pull(moduleId, sinceSeq);
+      relay.pull(moduleId, sinceSeq);
 }
 
 /// One device: its own journal directory and its own prefs. Every [run] is
@@ -76,7 +76,7 @@ class Device {
   final Directory dir;
   Map<String, Object> prefs = {};
 
-  /// False for the desktop hub, which leaves the 30-day purge to the phone.
+  /// False for Mars Hub, which leaves the 30-day purge to the phone.
   final bool autoPurge;
 
   Device(this.id, this.dir, {this.autoPurge = true});
@@ -98,14 +98,14 @@ class Device {
     return result;
   }
 
-  Future<SyncResult> sync(FakeHub hub, SyncEncryptor key) => run(
+  Future<SyncResult> sync(FakeRelay relay, SyncEncryptor key) => run(
         (journal, storage) => MarsSyncEngine(
           repository: JournalSyncRepository(
             journal: journal,
             storage: storage,
             deviceId: id,
           ),
-          client: FakeTransport(hub, id),
+          client: FakeTransport(relay, id),
           encryptor: key,
         ).syncNow(),
       );
@@ -142,13 +142,13 @@ Future<SyncResult> syncLive(
   String id,
   JournalRepository journal,
   LocalStorageService storage,
-  FakeHub hub,
+  FakeRelay relay,
   SyncEncryptor key,
 ) =>
     MarsSyncEngine(
       repository:
           JournalSyncRepository(journal: journal, storage: storage, deviceId: id),
-      client: FakeTransport(hub, id),
+      client: FakeTransport(relay, id),
       encryptor: key,
     ).syncNow();
 
@@ -156,14 +156,14 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   late Directory tmp;
-  late FakeHub hub;
+  late FakeRelay relay;
   late SyncEncryptor key;
   late Device phone;
   late Device laptop;
 
   setUp(() async {
     tmp = await Directory.systemTemp.createTemp('mars_log_sync_');
-    hub = FakeHub();
+    relay = FakeRelay();
     key = await SyncEncryptor.generate();
     phone = Device('phone', Directory('${tmp.path}/phone'));
     laptop = Device('laptop', Directory('${tmp.path}/laptop'));
@@ -237,27 +237,27 @@ void main() {
       // The real path: the echo arrives with the stamp truncated to ms (UTC),
       // so the local, finer stamp is *after* it and it is skipped as older.
       await phone.run((journal, _) => journal.upsert(entry('a')));
-      await phone.sync(hub, key);
+      await phone.sync(relay, key);
       await phone.run((journal, storage) async {
-        await storage.setSyncPullWatermark(seq: null, hubId: null);
+        await storage.setSyncPullWatermark(seq: null, relayId: null);
         final before = journal.revision.value;
-        await syncLive('phone', journal, storage, hub, key);
+        await syncLive('phone', journal, storage, relay, key);
         expect(journal.revision.value, before);
       });
     });
 
     test('an entry received earlier and pulled again does not rewrite the journal',
         () async {
-      // Received entries carry the hub's ms stamp, so a second pull (after a
+      // Received entries carry the relay's ms stamp, so a second pull (after a
       // re-pair) meets the same stamp — the same-content check is what
       // stops the rewrite here.
       await phone.run((journal, _) => journal.upsert(entry('a')));
-      await phone.sync(hub, key);
-      await laptop.sync(hub, key);
+      await phone.sync(relay, key);
+      await laptop.sync(relay, key);
       await laptop.run((journal, storage) async {
-        await storage.setSyncPullWatermark(seq: null, hubId: null);
+        await storage.setSyncPullWatermark(seq: null, relayId: null);
         final before = journal.revision.value;
-        await syncLive('laptop', journal, storage, hub, key);
+        await syncLive('laptop', journal, storage, relay, key);
         expect(journal.revision.value, before);
       });
     });
@@ -298,8 +298,8 @@ void main() {
         await phone.audio('a.wav').create(recursive: true);
         await journal.upsert(entry('a', transcript: 'Heute am See', audio: ['a.wav']));
       });
-      await phone.sync(hub, key);
-      await laptop.sync(hub, key);
+      await phone.sync(relay, key);
+      await laptop.sync(relay, key);
 
       await laptop.run((journal, _) async {
         final e = journal.byId('a')!;
@@ -315,14 +315,14 @@ void main() {
         await phone.audio('a.wav').create(recursive: true);
         await journal.upsert(entry('a', transcript: 'Tippfehlr', audio: ['a.wav']));
       });
-      await phone.sync(hub, key);
-      await laptop.sync(hub, key);
+      await phone.sync(relay, key);
+      await laptop.sync(relay, key);
 
       await tick();
       await laptop.run((journal, _) =>
           journal.setText(journal.byId('a')!, transcript: 'Tippfehler'));
-      await laptop.sync(hub, key);
-      await phone.sync(hub, key);
+      await laptop.sync(relay, key);
+      await phone.sync(relay, key);
 
       await phone.run((journal, _) async {
         final e = journal.byId('a')!;
@@ -343,8 +343,8 @@ void main() {
         await phone.audio('a.wav').create(recursive: true);
         await journal.upsert(entry('a', audio: ['a.wav']));
       });
-      await phone.sync(hub, key);
-      await laptop.sync(hub, key);
+      await phone.sync(relay, key);
+      await laptop.sync(relay, key);
 
       await tick();
       await phone.run((journal, _) async {
@@ -355,8 +355,8 @@ void main() {
       await tick();
       await laptop.run((journal, _) =>
           journal.setText(journal.byId('a')!, transcript: 'korrigiert'));
-      await laptop.sync(hub, key);
-      await phone.sync(hub, key);
+      await laptop.sync(relay, key);
+      await phone.sync(relay, key);
 
       await phone.run((journal, _) async {
         final e = journal.byId('a')!;
@@ -368,21 +368,21 @@ void main() {
 
     test('trash is an ordinary edit: restorable on the other device', () async {
       await phone.run((journal, _) => journal.upsert(entry('a')));
-      await phone.sync(hub, key);
-      await laptop.sync(hub, key);
+      await phone.sync(relay, key);
+      await laptop.sync(relay, key);
 
       await tick();
       await phone.run((journal, _) => journal.moveToTrash(journal.byId('a')!));
-      await phone.sync(hub, key);
-      await laptop.sync(hub, key);
+      await phone.sync(relay, key);
+      await laptop.sync(relay, key);
       await laptop.run((journal, _) async {
         expect(journal.deletedEntries.map((e) => e.id), ['a']);
       });
 
       await tick();
       await laptop.run((journal, _) => journal.restore(journal.byId('a')!));
-      await laptop.sync(hub, key);
-      await phone.sync(hub, key);
+      await laptop.sync(relay, key);
+      await phone.sync(relay, key);
       await phone.run((journal, _) async {
         expect(journal.entries.map((e) => e.id), ['a']);
       });
@@ -393,8 +393,8 @@ void main() {
         await phone.audio('a.wav').create(recursive: true);
         await journal.upsert(entry('a', audio: ['a.wav']));
       });
-      await phone.sync(hub, key);
-      await laptop.sync(hub, key);
+      await phone.sync(relay, key);
+      await laptop.sync(relay, key);
 
       await tick();
       await laptop.run((journal, _) async {
@@ -402,21 +402,21 @@ void main() {
         await journal.moveToTrash(e);
         await journal.purge(e);
       });
-      await laptop.sync(hub, key);
-      await phone.sync(hub, key);
+      await laptop.sync(relay, key);
+      await phone.sync(relay, key);
 
       await phone.run((journal, _) async {
         expect(journal.byId('a'), isNull);
         expect(await phone.audio('a.wav').exists(), isFalse);
       });
-      expect(hub.row('a')!.isDeleted, isTrue);
+      expect(relay.row('a')!.isDeleted, isTrue);
     });
 
     test('an entry still being analyzed is held back until it is ready', () async {
       await phone.run((journal, _) =>
           journal.upsert(entry('a', status: EntryStatus.analyzing, transcript: '')));
-      await phone.sync(hub, key);
-      expect(hub.row('a'), isNull);
+      await phone.sync(relay, key);
+      expect(relay.row('a'), isNull);
 
       await tick();
       await phone.run((journal, _) async {
@@ -425,20 +425,20 @@ void main() {
           ..transcript = 'fertig';
         await journal.upsert(e);
       });
-      await phone.sync(hub, key);
-      await laptop.sync(hub, key);
+      await phone.sync(relay, key);
+      await laptop.sync(relay, key);
       await laptop.run((journal, _) async {
         expect(journal.byId('a')!.transcript, 'fertig');
       });
     });
 
-    test('the hub only ever sees ciphertext', () async {
+    test('the relay only ever sees ciphertext', () async {
       await phone.run((journal, _) =>
           journal.upsert(entry('a', transcript: 'sehr privat')));
-      await phone.sync(hub, key);
-      final stored = jsonEncode(hub.row('a')!.payload);
+      await phone.sync(relay, key);
+      final stored = jsonEncode(relay.row('a')!.payload);
       expect(stored, isNot(contains('sehr privat')));
-      expect(hub.row('a')!.payload.keys, ['ciphertext']);
+      expect(relay.row('a')!.payload.keys, ['ciphertext']);
     });
   });
 
@@ -449,8 +449,8 @@ void main() {
         await phone.audio('a.wav').create(recursive: true);
         await journal.upsert(entry('a', audio: ['a.wav']));
       });
-      await phone.sync(hub, key);
-      await laptop.sync(hub, key);
+      await phone.sync(relay, key);
+      await laptop.sync(relay, key);
 
       await tick();
       await phone.run((journal, _) async {
@@ -463,8 +463,8 @@ void main() {
       });
       await tick();
       await laptop.run((lj, _) => lj.setPlace(lj.byId('a')!, 'Wien'));
-      await laptop.sync(hub, key);
-      await phone.sync(hub, key);
+      await laptop.sync(relay, key);
+      await phone.sync(relay, key);
 
       await phone.run((journal, _) async {
         final e = journal.byId('a')!;
@@ -484,16 +484,16 @@ void main() {
         await phone.audio('a.wav').create(recursive: true);
         await journal.upsert(entry('a', audio: ['a.wav']));
       });
-      await phone.sync(hub, key);
-      await laptop.sync(hub, key);
+      await phone.sync(relay, key);
+      await laptop.sync(relay, key);
 
       await tick();
       await phone.run((journal, _) async {
         await phone.audio('b.wav').create(recursive: true);
         await journal.upsert(journal.byId('a')!..audioFileNames = ['a.wav', 'b.wav']);
       });
-      await phone.sync(hub, key);
-      await laptop.sync(hub, key);
+      await phone.sync(relay, key);
+      await laptop.sync(relay, key);
       await laptop.run((lj, _) async {
         expect(lj.byId('a')!.audioFileNames, ['a.wav', 'b.wav']);
       });
@@ -516,8 +516,8 @@ void main() {
       await File('${laptop.dir.path}/entries.json')
           .writeAsString(jsonEncode([restored.toJson()]));
 
-      await phone.sync(hub, key); // load → auto-purge → tombstone(now)
-      await laptop.sync(hub, key);
+      await phone.sync(relay, key); // load → auto-purge → tombstone(now)
+      await laptop.sync(relay, key);
       await laptop.run((lj, _) async {
         expect(lj.byId('a'), isNotNull, reason: 'deliberate restore lost to auto-purge');
       });
@@ -526,7 +526,7 @@ void main() {
 
   group('review round 5', () {
     /// A paired device: the 30-day purge then waits for a completed round.
-    void pair(Device d) => d.prefs['flutter.sync_server_url'] = 'https://hub';
+    void pair(Device d) => d.prefs['flutter.sync_server_url'] = 'https://relay';
 
     Future<JournalEntry> trashedLongAgo(List<Device> devices, {List<String> audio = const []}) async {
       final trashedAt = DateTime.now().subtract(const Duration(days: 31));
@@ -547,9 +547,9 @@ void main() {
         ..changedAt = DateTime.now().subtract(const Duration(minutes: 5));
       await File('${laptop.dir.path}/entries.json')
           .writeAsString(jsonEncode([restored.toJson()]));
-      await laptop.sync(hub, key);
+      await laptop.sync(relay, key);
 
-      await phone.sync(hub, key); // app start: load, then the first round
+      await phone.sync(relay, key); // app start: load, then the first round
       await phone.run((journal, _) async {
         expect(journal.byId('a')?.deletedAt, isNull);
         expect(journal.byId('a')!.audioFileNames, ['a.wav']);
@@ -559,7 +559,7 @@ void main() {
     });
 
     test('a paired device purges expired entries after a round, and the tombstone '
-        'reaches the hub although its stamp lies behind the watermark', () async {
+        'reaches the relay although its stamp lies behind the watermark', () async {
       pair(phone);
       final e = await trashedLongAgo([phone], audio: ['a.wav']);
       await phone.audio('a.wav').create(recursive: true);
@@ -567,18 +567,18 @@ void main() {
       await phone.run((journal, _) async {
         expect(journal.byId('a'), isNotNull, reason: 'purged at load while paired');
       });
-      await phone.sync(hub, key); // pushes the trashed entry, then purges
+      await phone.sync(relay, key); // pushes the trashed entry, then purges
       expect(phone.audio('a.wav').existsSync(), isFalse);
       await phone.run((journal, _) async => expect(journal.byId('a'), isNull));
 
       await tick();
-      await phone.sync(hub, key); // pushes the tombstone
-      final row = hub.row('a')!;
+      await phone.sync(relay, key); // pushes the tombstone
+      final row = relay.row('a')!;
       expect(row.deletedAt, isNotNull);
       expect(row.updatedAtMs, e.changedAt.millisecondsSinceEpoch + 1);
     });
 
-    test('a device without autoPurge (the hub) keeps expired entries for the phone to purge',
+    test('a device without autoPurge (Mars Hub) keeps expired entries for the phone to purge',
         () async {
       await trashedLongAgo([laptop]); // unpaired: would purge at load
       final journal = await JournalRepository.getInstance(
@@ -640,13 +640,13 @@ void main() {
 
   group('review round 6', () {
     late Directory tmp;
-    late FakeHub hub;
+    late FakeRelay relay;
     late SyncEncryptor key;
     late Device phone;
 
     setUp(() async {
       tmp = await Directory.systemTemp.createTemp('mars_log_review6_');
-      hub = FakeHub();
+      relay = FakeRelay();
       key = await SyncEncryptor.generate();
       phone = Device('phone', Directory('${tmp.path}/phone'));
     });
@@ -687,14 +687,14 @@ void main() {
 
     test('after a corrupt index, a re-pair brings the entries back to their audio',
         () async {
-      phone.prefs['flutter.sync_server_url'] = 'https://hub';
+      phone.prefs['flutter.sync_server_url'] = 'https://relay';
       await phone.run((j, _) async => j.upsert(entry('a', audio: ['a.wav'])));
       await phone.audio('a.wav').create(recursive: true);
-      await phone.sync(hub, key);
-      await phone.sync(hub, key); // the watermark now covers its own push
+      await phone.sync(relay, key);
+      await phone.sync(relay, key); // the watermark now covers its own push
 
       await File('${phone.dir.path}/entries.json').writeAsString('[{"id": "a", tru');
-      await phone.sync(hub, key);
+      await phone.sync(relay, key);
       await phone.run((j, _) async {
         expect(j.byId('a'), isNull, reason: 'the pull watermark still says "seen"');
       });
@@ -702,7 +702,7 @@ void main() {
       phone.prefs
         ..remove('flutter.log_sync_last_synced_at')
         ..removeWhere((k, _) => k.contains('last_seen'));
-      await phone.sync(hub, key);
+      await phone.sync(relay, key);
       await phone.run((j, _) async {
         expect(j.byId('a')?.audioFileNames, ['a.wav']);
       });
@@ -728,12 +728,12 @@ void main() {
       });
     });
 
-    test('H2: hub restore undoes a 30-day purge without wiping the phone',
+    test('H2: relay restore undoes a 30-day purge without wiping the phone',
         () async {
       final laptop =
           Device('laptop', Directory('${tmp.path}/laptop'), autoPurge: false);
       for (final d in [phone, laptop]) {
-        d.prefs['flutter.sync_server_url'] = 'https://hub';
+        d.prefs['flutter.sync_server_url'] = 'https://relay';
       }
 
       final trashedAt = DateTime.now().subtract(const Duration(days: 31));
@@ -748,39 +748,39 @@ void main() {
       await phone.run((j, _) async => j.upsert(entry('keep', audio: ['keep.wav'])));
       await phone.audio('keep.wav').create(recursive: true);
 
-      await laptop.sync(hub, key);
-      final snapshot = FakeHub()..push('laptop', [hub.row('a')!]);
+      await laptop.sync(relay, key);
+      final snapshot = FakeRelay()..push('laptop', [relay.row('a')!]);
 
-      await phone.sync(hub, key); // purges 'a' after the round
+      await phone.sync(relay, key); // purges 'a' after the round
       await tick();
-      await phone.sync(hub, key); // pushes the tombstone, prunes the trace
-      await laptop.sync(hub, key);
-      expect(hub.row('a')!.deletedAt, isNotNull);
+      await phone.sync(relay, key); // pushes the tombstone, prunes the trace
+      await laptop.sync(relay, key);
+      expect(relay.row('a')!.deletedAt, isNotNull);
 
-      // Recovery: hub from the snapshot, both devices re-paired (watermarks
+      // Recovery: relay from the snapshot, both devices re-paired (watermarks
       // reset), laptop first — and the phone's data left alone.
-      hub = snapshot;
+      relay = snapshot;
       void rePair(Device d) => d.prefs
         ..remove('flutter.log_sync_last_synced_at')
         ..removeWhere((k, _) => k.contains('last_seen'));
       rePair(laptop);
-      await laptop.sync(hub, key);
+      await laptop.sync(relay, key);
       await laptop.run((j, _) async {
         expect(j.byId('a')?.deletedAt, isNotNull, reason: 'back in the trash');
         await j.restore(j.byId('a')!);
       });
       await tick();
-      await laptop.sync(hub, key);
+      await laptop.sync(relay, key);
 
       rePair(phone);
-      await phone.sync(hub, key);
+      await phone.sync(relay, key);
       await tick();
-      await phone.sync(hub, key);
+      await phone.sync(relay, key);
       await phone.run((j, _) async {
         expect(j.byId('a')?.deletedAt, isNull);
         expect(j.byId('keep'), isNotNull);
       });
-      expect(hub.row('a')!.deletedAt, isNull);
+      expect(relay.row('a')!.deletedAt, isNull);
       expect(phone.audio('keep.wav').existsSync(), isTrue);
     });
   });
@@ -816,8 +816,8 @@ void main() {
         await j.upsert(e);
         await j.saveAnalysis(j.byId('a')!, entryChanged: false);
       });
-      await phone.sync(hub, key);
-      await laptop.sync(hub, key);
+      await phone.sync(relay, key);
+      await laptop.sync(relay, key);
 
       await tick();
       await laptop.run((j, _) => laptopAnalyzes(j, 'a', 'vom Laptop'));
@@ -826,9 +826,9 @@ void main() {
       // under one item per entry, one of the two would be lost.
       await phone.run((j, _) => j.setPlace(j.byId('a')!, 'Wien'));
 
-      await laptop.sync(hub, key);
-      await phone.sync(hub, key);
-      await laptop.sync(hub, key);
+      await laptop.sync(relay, key);
+      await phone.sync(relay, key);
+      await laptop.sync(relay, key);
 
       for (final d in [phone, laptop]) {
         await d.run((j, _) async {
@@ -842,17 +842,17 @@ void main() {
 
     test('a summary edited by hand survives a later analysis', () async {
       await phone.run((j, _) => j.upsert(entry('a', transcript: 'heute')));
-      await phone.sync(hub, key);
-      await laptop.sync(hub, key);
+      await phone.sync(relay, key);
+      await laptop.sync(relay, key);
 
       await tick();
       await phone.run((j, _) => j.edit(j.byId('a')!, summary: 'meine Worte', tags: ['eigen']));
-      await phone.sync(hub, key);
-      await laptop.sync(hub, key);
+      await phone.sync(relay, key);
+      await laptop.sync(relay, key);
       await tick();
       await laptop.run((j, _) => laptopAnalyzes(j, 'a', 'vom Laptop'));
-      await laptop.sync(hub, key);
-      await phone.sync(hub, key);
+      await laptop.sync(relay, key);
+      await phone.sync(relay, key);
 
       for (final d in [phone, laptop]) {
         await d.run((j, _) async {
@@ -869,19 +869,19 @@ void main() {
         await j.upsert(entry('a', transcript: 'eins'));
         await j.upsert(entry('b', transcript: 'zwei'));
       });
-      await phone.sync(hub, key);
-      await laptop.sync(hub, key);
+      await phone.sync(relay, key);
+      await laptop.sync(relay, key);
       await tick();
       await phone.run((j, _) => j.edit(j.byId('b')!, title: 'Mein Titel'));
-      await phone.sync(hub, key);
-      await laptop.sync(hub, key);
+      await phone.sync(relay, key);
+      await laptop.sync(relay, key);
       await tick();
       await laptop.run((j, _) async {
         await laptopAnalyzes(j, 'a', 'x');
         await laptopAnalyzes(j, 'b', 'y');
       });
-      await laptop.sync(hub, key);
-      await phone.sync(hub, key);
+      await laptop.sync(relay, key);
+      await phone.sync(relay, key);
 
       await phone.run((j, _) async {
         expect(j.byId('a')!.title, 'Laptop-Titel');
@@ -896,14 +896,14 @@ void main() {
           ..summary = 'von Gemini'
           ..analysisModel = 'gemini-3.7-flash');
       });
-      await phone.sync(hub, key);
-      await laptop.sync(hub, key);
+      await phone.sync(relay, key);
+      await laptop.sync(relay, key);
       await tick();
       await laptop.run((j, _) async {
         expect(await j.writeTitle('a', 'Alter Tag', basis: transcriptBasis('alt')), isTrue);
       });
-      await laptop.sync(hub, key);
-      await phone.sync(hub, key);
+      await laptop.sync(relay, key);
+      await phone.sync(relay, key);
       await phone.run((j, _) async {
         final e = j.byId('a')!;
         expect(e.title, 'Alter Tag');
@@ -920,14 +920,14 @@ void main() {
       });
       await tick();
       await phone.run((j, _) => j.setPlace(j.byId('a')!, 'Wien'));
-      await phone.sync(hub, key);
+      await phone.sync(relay, key);
 
-      await laptop.sync(hub, key);
+      await laptop.sync(relay, key);
       await laptop.run((j, _) async {
         expect(j.byId('a')!.place, 'Wien');
         expect(j.byId('a')!.summary, 'von Gemini', reason: 'lost with the old item');
       });
-      expect(hub.row('a$kAnalysisItemSuffix')!.updatedAtMs,
+      expect(relay.row('a$kAnalysisItemSuffix')!.updatedAtMs,
           entry('a').createdAt.millisecondsSinceEpoch);
     });
 
@@ -942,11 +942,11 @@ void main() {
         updatedAt: old.changedAt,
         payload: old.toJson(), // the old format: no 'v', analysis inside
       );
-      hub.push('old-phone', [
+      relay.push('old-phone', [
         item.copyWith(payload: {'ciphertext': await key.encrypt(item.payload, aad: item.aad)}),
       ]);
 
-      await laptop.sync(hub, key);
+      await laptop.sync(relay, key);
       await laptop.run((j, _) async {
         final e = j.byId('a')!;
         expect(e.summary, 'von Gemini');
@@ -961,30 +961,30 @@ void main() {
         await j.upsert(entry('a', transcript: 'x')..summary = 's');
         await j.saveAnalysis(j.byId('a')!, entryChanged: false);
       });
-      await phone.sync(hub, key);
-      await laptop.sync(hub, key);
+      await phone.sync(relay, key);
+      await laptop.sync(relay, key);
       await tick();
       await phone.run((j, _) async {
         await j.moveToTrash(j.byId('a')!);
         await j.purge(j.byId('a')!);
       });
-      await phone.sync(hub, key);
-      await laptop.sync(hub, key);
+      await phone.sync(relay, key);
+      await laptop.sync(relay, key);
 
-      expect(hub.row('a')!.isDeleted, isTrue);
-      expect(hub.row('a$kAnalysisItemSuffix')!.isDeleted, isTrue);
+      expect(relay.row('a')!.isDeleted, isTrue);
+      expect(relay.row('a$kAnalysisItemSuffix')!.isDeleted, isTrue);
       await laptop.run((j, _) async => expect(j.byId('a'), isNull));
     });
 
     test('an entry whose phone analysis failed is fine where an analysis exists', () async {
       await phone.run((j, _) => j.upsert(entry('a', transcript: 'x', status: EntryStatus.failed)
         ..errorMessage = 'Modell fehlt'));
-      await phone.sync(hub, key);
-      await laptop.sync(hub, key);
+      await phone.sync(relay, key);
+      await laptop.sync(relay, key);
       await tick();
       await laptop.run((j, _) => laptopAnalyzes(j, 'a', 'vom Laptop'));
-      await laptop.sync(hub, key);
-      await phone.sync(hub, key);
+      await laptop.sync(relay, key);
+      await phone.sync(relay, key);
       await phone.run((j, _) async {
         expect(j.byId('a')!.status, EntryStatus.ready);
         expect(j.byId('a')!.summary, 'vom Laptop');
@@ -1006,11 +1006,11 @@ void main() {
     test('an insight made on the laptop reaches the phone, a newer one replaces it',
         () async {
       await phone.run((j, _) => j.upsert(entry('a')));
-      await phone.sync(hub, key);
-      await laptop.sync(hub, key);
+      await phone.sync(relay, key);
+      await laptop.sync(relay, key);
       await laptop.run((j, _) => j.writeInsight(insight(DateTime.now(), 'alt')));
-      await laptop.sync(hub, key);
-      await phone.sync(hub, key);
+      await laptop.sync(relay, key);
+      await phone.sync(relay, key);
       expect(await phone.run((j, _) async => j.insight(kOverallInsightId)?.sections.single.text),
           'alt');
       expect(await phone.run((j, _) async => j.entries.length), 1,
@@ -1018,8 +1018,8 @@ void main() {
 
       await tick();
       await laptop.run((j, _) => j.writeInsight(insight(DateTime.now(), 'neu')));
-      await laptop.sync(hub, key);
-      await phone.sync(hub, key);
+      await laptop.sync(relay, key);
+      await phone.sync(relay, key);
       expect(await phone.run((j, _) async => j.insight(kOverallInsightId)?.sections.single.text),
           'neu');
     });
@@ -1027,14 +1027,14 @@ void main() {
     test('names merged on the phone reach the laptop, a later edit wins', () async {
       await phone.run(
           (j, _) => j.writeAliases(const PeopleAliases().merge('Wincent', 'Vincent')));
-      await phone.sync(hub, key);
-      await laptop.sync(hub, key);
+      await phone.sync(relay, key);
+      await laptop.sync(relay, key);
       expect(await laptop.run((j, _) async => j.aliases.canonical('Wincent')), 'Vincent');
 
       await tick();
       await laptop.run((j, _) => j.writeAliases(j.aliases.split('Wincent')));
-      await laptop.sync(hub, key);
-      await phone.sync(hub, key);
+      await laptop.sync(relay, key);
+      await phone.sync(relay, key);
       expect(await phone.run((j, _) async => j.aliases.canonical('Wincent')), 'Wincent');
     });
   });

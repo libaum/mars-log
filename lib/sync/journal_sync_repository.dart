@@ -68,7 +68,7 @@ class JournalSyncRepository implements SyncRepository {
       } else if (entryDue && _hasAnalysis(entry)) {
         // An analysis from before the split (Gemini) has no clock of its own
         // and would never go out as its own item — while the entry item
-        // above replaces the old combined one on the hub, taking it along.
+        // above replaces the old combined one on the relay, taking it along.
         // So it rides with every push of its entry, stamped with the entry's
         // creation: older than any analysis written since, so it never
         // displaces one.
@@ -123,7 +123,7 @@ class JournalSyncRepository implements SyncRepository {
       // see PurgeMark.
       if (since != null && mark.recorded.isBefore(since)) continue;
       // Both items go: the entry's and its analysis'. The analysis tombstone
-      // only clears the hub's copy; devices drop the analysis with the entry.
+      // only clears the relay's copy; devices drop the analysis with the entry.
       for (final itemId in [id, '$id$kAnalysisItemSuffix']) {
         items.add(
           SyncItem(
@@ -178,7 +178,7 @@ class JournalSyncRepository implements SyncRepository {
         continue;
       }
       // The envelope's id is authenticated (AAD); the payload's id must agree
-      // or the payload is not what the hub claims it is.
+      // or the payload is not what the relay claims it is.
       if (item.payload['id'] != item.itemId) continue;
       if (isAnalysis) {
         final entryId = item.itemId
@@ -224,7 +224,7 @@ class JournalSyncRepository implements SyncRepository {
     final purged = _storage.getSyncPurged()
       ..removeWhere((_, mark) => mark.recorded.isBefore(time));
     await _storage.setSyncPurged(purged);
-    // The round is complete: this device now holds everything the hub had,
+    // The round is complete: this device now holds everything the relay had,
     // including a restore made elsewhere on day 29. Only now may the 30-day
     // purge delete audio. Its tombstones are recorded after [time], so they
     // survive the pruning above and go out with the next round.
@@ -234,12 +234,12 @@ class JournalSyncRepository implements SyncRepository {
   @override
   Future<PullWatermark?> pullWatermark() async {
     final seq = _storage.getSyncLastSeenSeq();
-    final hubId = _storage.getSyncLastSeenHubId();
-    if (seq == null || hubId == null) return null;
-    return PullWatermark(hubId: hubId, seq: seq);
+    final relayId = _storage.getSyncLastSeenRelayId();
+    if (seq == null || relayId == null) return null;
+    return PullWatermark(relayId: relayId, seq: seq);
   }
 
   @override
   Future<void> setPullWatermark(PullWatermark watermark) =>
-      _storage.setSyncPullWatermark(seq: watermark.seq, hubId: watermark.hubId);
+      _storage.setSyncPullWatermark(seq: watermark.seq, relayId: watermark.relayId);
 }

@@ -4,9 +4,9 @@ import 'package:mars_log/services/service_locator.dart';
 import 'package:mars_log/sync/sync_service.dart';
 import 'package:mars_log/theme/theme_constants.dart';
 
-/// Pairing and status for the sync to the owner's hub. Reached from Settings.
+/// Pairing and status for the sync to the owner's relay. Reached from Settings.
 ///
-/// Three independent steps: the hub (URL + device token), the shared
+/// Three independent steps: the relay (URL + device token), the shared
 /// encryption key, and then sync itself. Unlike mars_thoughts, Mars Log is
 /// never the first device — the key already exists — so *pasting* it is the
 /// primary action and generating a new one the secondary.
@@ -56,9 +56,9 @@ class _SyncScreenState extends State<SyncScreen> {
     }
   }
 
-  Future<void> _pairHub() async {
+  Future<void> _pairRelay() async {
     final result = await _prompt(
-      title: 'Hub',
+      title: 'Relay',
       fields: const ['Server-URL', 'Geräte-Token'],
       initial: [_sync.serverUrl ?? 'https://', ''],
       obscure: const [false, true],
@@ -75,7 +75,7 @@ class _SyncScreenState extends State<SyncScreen> {
       'Neuen Schlüssel erzeugen?',
       'Nur, wenn noch kein Gerät einen hat. Mars Thoughts hat normalerweise '
           'schon einen — dann hier „Einfügen“. Ein zweiter Schlüssel passt '
-          'nicht zum Hub und wird beim ersten Sync abgewiesen.',
+          'nicht zum Relay und wird beim ersten Sync abgewiesen.',
     );
     if (!confirmed) return;
     await _guard(() async {
@@ -129,8 +129,8 @@ class _SyncScreenState extends State<SyncScreen> {
   Future<void> _unpair() async {
     final confirmed = await _confirm(
       'Kopplung aufheben?',
-      'Entfernt Hub-Kopplung und Schlüssel von diesem Gerät. Die Einträge '
-          'bleiben, wo sie sind — hier und auf dem Hub.',
+      'Entfernt Relay-Kopplung und Schlüssel von diesem Gerät. Die Einträge '
+          'bleiben, wo sie sind — hier und auf dem Relay.',
     );
     if (!confirmed) return;
     await _guard(_sync.unpair);
@@ -159,12 +159,12 @@ class _SyncScreenState extends State<SyncScreen> {
                   ),
                   const SizedBox(height: 32),
                   _Step(
-                    label: 'Hub',
+                    label: 'Relay',
                     detail: _deviceId == null
                         ? 'Nicht gekoppelt'
                         : '${_sync.serverUrl}\nals „$_deviceId“',
                     action: _deviceId == null ? 'Koppeln' : 'Neu koppeln',
-                    onTap: _busy ? null : _pairHub,
+                    onTap: _busy ? null : _pairRelay,
                   ),
                   _Step(
                     label: 'Schlüssel',
@@ -197,7 +197,7 @@ class _SyncScreenState extends State<SyncScreen> {
                     const SizedBox(height: 48),
                     _Step(
                       label: 'Entkoppeln',
-                      detail: 'Hub und Schlüssel auf diesem Gerät vergessen',
+                      detail: 'Relay und Schlüssel auf diesem Gerät vergessen',
                       action: 'Entkoppeln',
                       onTap: _busy ? null : _unpair,
                     ),
@@ -217,7 +217,7 @@ class _SyncScreenState extends State<SyncScreen> {
         : 'zuletzt ${_ago(status.lastSyncedAt!)}';
     final skipped = status.undecryptable == 0
         ? ''
-        : '\n${status.undecryptable} Eintrag/Einträge auf dem Hub nicht entschlüsselbar';
+        : '\n${status.undecryptable} Eintrag/Einträge auf dem Relay nicht entschlüsselbar';
     return switch (status.phase) {
       SyncPhase.unpaired => 'Erst oben koppeln',
       SyncPhase.syncing => 'Synchronisiere …',

@@ -18,7 +18,7 @@ import 'package:mars_log/logic/recording_manager.dart';
 import 'package:mars_log/services/service_locator.dart';
 import 'package:mars_sync/mars_sync.dart';
 
-import 'sync_test.dart' show FakeHub, Device, entry, tick, syncLive;
+import 'sync_test.dart' show FakeRelay, Device, entry, tick, syncLive;
 
 /// A model that answers only once [gate] opens — the seconds during which a
 /// sync round can replace the entry being analyzed.
@@ -108,7 +108,7 @@ Future<void> _settle() => Future<void>.delayed(const Duration(milliseconds: 30))
 /// assertions stay inside and no further phone.run follows.
 void main() {
   late Directory tmp;
-  late FakeHub hub;
+  late FakeRelay relay;
   late SyncEncryptor key;
   late Device phone;
   late Device laptop;
@@ -116,7 +116,7 @@ void main() {
   setUp(() async {
     await getIt.reset();
     tmp = await Directory.systemTemp.createTemp('mars_log_race_');
-    hub = FakeHub();
+    relay = FakeRelay();
     key = await SyncEncryptor.generate();
     phone = Device('phone', Directory('${tmp.path}/phone'));
     laptop = Device('laptop', Directory('${tmp.path}/laptop'));
@@ -129,8 +129,8 @@ void main() {
       await phone.audio('a.m4a').create(recursive: true);
       await journal.upsert(entry('a', transcript: 'alt', audio: ['a.m4a'])..tags = ['alt']);
     });
-    await phone.sync(hub, key);
-    await laptop.sync(hub, key);
+    await phone.sync(relay, key);
+    await laptop.sync(relay, key);
 
     await phone.run((journal, storage) async {
       final engine = _Engine((_) => _result());
@@ -146,8 +146,8 @@ void main() {
         await lj.edit(lj.byId('a')!, place: 'Wien', tags: ['korrigiert']);
         await lj.moveToTrash(lj.byId('a')!);
       });
-      await laptop.sync(hub, key);
-      await syncLive('phone', journal, storage, hub, key);
+      await laptop.sync(relay, key);
+      await syncLive('phone', journal, storage, relay, key);
 
       engine.gate.complete();
       await analysis;
@@ -169,8 +169,8 @@ void main() {
       await phone.audio('a.wav').create(recursive: true);
       await journal.upsert(entry('a', transcript: 'Tippfehlr', audio: ['a.wav']));
     });
-    await phone.sync(hub, key);
-    await laptop.sync(hub, key);
+    await phone.sync(relay, key);
+    await laptop.sync(relay, key);
 
     await phone.run((journal, storage) async {
       final engine = _Engine((text) => text == null
@@ -186,8 +186,8 @@ void main() {
 
       await tick();
       await laptop.run((lj, _) => lj.setText(lj.byId('a')!, transcript: 'Tippfehler'));
-      await laptop.sync(hub, key);
-      await syncLive('phone', journal, storage, hub, key);
+      await laptop.sync(relay, key);
+      await syncLive('phone', journal, storage, relay, key);
 
       engine.gate.complete();
       await append;
@@ -202,8 +202,8 @@ void main() {
   test('a recording appended to an entry purged meanwhile becomes its own entry',
       () async {
     await phone.run((journal, _) => journal.upsert(entry('a')));
-    await phone.sync(hub, key);
-    await laptop.sync(hub, key);
+    await phone.sync(relay, key);
+    await laptop.sync(relay, key);
 
     await phone.run((journal, storage) async {
       final engine = _Engine((text) => _result(transcript: text ?? 'nur das Neue'));
@@ -221,8 +221,8 @@ void main() {
         await lj.moveToTrash(e);
         await lj.purge(e);
       });
-      await laptop.sync(hub, key);
-      await syncLive('phone', journal, storage, hub, key);
+      await laptop.sync(relay, key);
+      await syncLive('phone', journal, storage, relay, key);
       expect(journal.byId('a'), isNull);
 
       engine.gate.complete();
@@ -238,8 +238,8 @@ void main() {
   test('a recording appended to an entry trashed meanwhile brings it back', () async {
     // Review round 5, L2: the new recording ended up in the trash.
     await phone.run((journal, _) => journal.upsert(entry('a')));
-    await phone.sync(hub, key);
-    await laptop.sync(hub, key);
+    await phone.sync(relay, key);
+    await laptop.sync(relay, key);
 
     await phone.run((journal, storage) async {
       final engine = _Engine((text) => _result(transcript: text ?? 'neu'));
@@ -253,8 +253,8 @@ void main() {
 
       await tick();
       await laptop.run((lj, _) => lj.moveToTrash(lj.byId('a')!));
-      await laptop.sync(hub, key);
-      await syncLive('phone', journal, storage, hub, key);
+      await laptop.sync(relay, key);
+      await syncLive('phone', journal, storage, relay, key);
 
       engine.gate.complete();
       await append;

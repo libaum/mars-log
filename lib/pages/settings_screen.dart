@@ -537,7 +537,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       message: 'Das Journal war nicht lesbar und wurde beiseitegelegt. '
           'Es steckt in jedem Export, und bis du es verwirfst, bleiben alle '
           'Aufnahmen erhalten. Mit Sync: entkoppeln und neu koppeln holt die '
-          'Einträge vom Hub zurück. Verwerfen löscht beim nächsten Start '
+          'Einträge vom Relay zurück. Verwerfen löscht beim nächsten Start '
           'jede Aufnahme ohne Eintrag.',
       confirmLabel: 'Verwerfen',
     );

@@ -18,11 +18,11 @@ class LocalStorageService {
   static const _keyDailyExportEnabled = 'daily_export_enabled';
   static const _keyDailyExportFolderUri = 'daily_export_folder_uri';
   static const _keyDailyExportFolderName = 'daily_export_folder_name';
-  // Sync keys come in two kinds, and the difference matters on the desktop
-  // hub, where every module shares one prefs file with mars_thoughts:
+  // Sync keys come in two kinds, and the difference matters in Mars Hub,
+  // where every module shares one prefs file with mars_thoughts:
   //
-  // - The hub URL belongs to the *device*: same name as mars_thoughts, so
-  //   the hub pairs once and every module follows.
+  // - The relay URL belongs to the *device*: same name as mars_thoughts, so
+  //   Mars Hub pairs once and every module follows.
   // - Watermarks and the purge trace belong to the *module*: prefixed, or
   //   the modules would advance each other's watermarks and push each
   //   other's tombstones. (On the phone the apps have separate prefs; the
@@ -31,7 +31,9 @@ class LocalStorageService {
   static const _keySyncPurged = 'log_sync_purged';
   static const _keySyncLastSyncedAt = 'log_sync_last_synced_at';
   static const _keySyncLastSeenSeq = 'log_sync_last_seen_seq';
-  static const _keySyncLastSeenHubId = 'log_sync_last_seen_hub_id';
+  // Value keeps the old "hub" name: paired devices already store it
+  // (docs/adr/0001-relay-rename-keeps-hub-id-on-the-wire.md at the Mars root).
+  static const _keySyncLastSeenRelayId = 'log_sync_last_seen_hub_id';
 
   final SharedPreferences _prefs;
 
@@ -189,23 +191,23 @@ class LocalStorageService {
     }
   }
 
-  /// Hub sequence number up to which this device has pulled, and which hub
+  /// Relay sequence number up to which this device has pulled, and which relay
   /// instance that number belongs to. Independent of [getSyncLastSyncedAt],
   /// which is the *push* watermark on the local clock.
   int? getSyncLastSeenSeq() => _prefs.getInt(_keySyncLastSeenSeq);
 
-  String? getSyncLastSeenHubId() => _prefs.getString(_keySyncLastSeenHubId);
+  String? getSyncLastSeenRelayId() => _prefs.getString(_keySyncLastSeenRelayId);
 
   Future<void> setSyncPullWatermark({
     required int? seq,
-    required String? hubId,
+    required String? relayId,
   }) async {
-    if (seq == null || hubId == null) {
+    if (seq == null || relayId == null) {
       await _prefs.remove(_keySyncLastSeenSeq);
-      await _prefs.remove(_keySyncLastSeenHubId);
+      await _prefs.remove(_keySyncLastSeenRelayId);
     } else {
       await _prefs.setInt(_keySyncLastSeenSeq, seq);
-      await _prefs.setString(_keySyncLastSeenHubId, hubId);
+      await _prefs.setString(_keySyncLastSeenRelayId, relayId);
     }
   }
 }

@@ -4,7 +4,7 @@
 const kInsightPrefix = 'insight:';
 
 /// The one evaluation over the whole journal ("Muster über alles"), made on
-/// the laptop by the hub.
+/// the laptop by Mars Hub.
 const kOverallInsightId = '${kInsightPrefix}all';
 
 /// One headed part of an [Insight].
@@ -20,7 +20,7 @@ class InsightSection {
 }
 
 /// A written evaluation over many entries — too big for the phone's model,
-/// so it is made on the laptop (Claude Code, run by the hub) and synced.
+/// so it is made on the laptop (Claude Code, run by Mars Hub) and synced.
 /// Recomputable like every analysis: a new one simply replaces the old.
 class Insight {
   final String id;

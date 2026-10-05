@@ -85,16 +85,16 @@ class JournalRepository {
   JournalRepository._(this._purgeTrace, this._readOnly, this._autoPurge);
 
   /// Whether this device runs the 30-day purge at all. Only the device that
-  /// holds the recordings does (the phone); the desktop hub waits for its
-  /// tombstones. That keeps the hub's trash as the place to undo a lost
-  /// entry after a hub restore — see ARCHITECTURE.md §7, recovery step 6.
+  /// holds the recordings does (the phone); Mars Hub waits for its
+  /// tombstones. That keeps Mars Hub's trash as the place to undo a lost
+  /// entry after a relay restore — see ARCHITECTURE.md §7, recovery step 6.
   final bool _autoPurge;
 
   /// A snapshot for reading only (the background export), never written.
   final bool _readOnly;
 
   /// [directory] defaults to the app documents dir — private on Android, but
-  /// `~/Documents` on Linux, so the desktop hub passes its own.
+  /// `~/Documents` on Linux, so Mars Hub passes its own.
   ///
   /// [readOnly]: for a second instance next to the app's own — the daily
   /// export in its background isolate. Loading then changes nothing on disk:
@@ -231,7 +231,7 @@ class JournalRepository {
 
   List<Insight> get insights => List.unmodifiable(_insights.values);
 
-  /// Stores an insight made here (the hub). Its [Insight.createdAt] is the
+  /// Stores an insight made here (Mars Hub). Its [Insight.createdAt] is the
   /// clock; a newer one replaces an older one with the same id.
   Future<void> writeInsight(Insight insight) async {
     _insights[insight.id] = insight;
@@ -405,7 +405,7 @@ class JournalRepository {
     // Nobody pressed anything, so this tombstone must not compete as "now":
     // a restore made on another device on day 29 that this device hasn't
     // pulled yet would lose to it (a paired device runs this only after a
-    // pull, but a restore may still land on the hub a second later). It
+    // pull, but a restore may still land on the relay a second later). It
     // competes as one millisecond after the entry's last known change: newer than the trashed version (so it propagates), older than
     // any later restore or edit elsewhere (so those win). Every device
     // computes the same stamp, so the duplicate tombstones agree.
@@ -464,7 +464,7 @@ class JournalRepository {
   }
 
   // ── Edits that need no microphone, no GPS and no model ──────────────────
-  // They live here rather than in JournalManager so the desktop hub can make
+  // They live here rather than in JournalManager so Mars Hub can make
   // them too; JournalManager only adds its notifier refresh on top.
 
   /// Moves an entry to a different day (e.g. backdating). Re-sorts.
@@ -814,7 +814,7 @@ class JournalRepository {
   File get indexFile => File(_indexPath);
 }
 
-/// An analysis item as it arrived from the hub — see [JournalEntry.toAnalysisItemJson].
+/// An analysis item as it arrived from the relay — see [JournalEntry.toAnalysisItemJson].
 class SyncedAnalysis {
   final String entryId;
   final DateTime changedAt;

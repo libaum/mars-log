@@ -29,14 +29,14 @@ const _allowed = [
   'package:mars_log/sync/',
 ];
 
-/// The phone's key store. It has a Linux build, but the hub never constructs
+/// The phone's key store. It has a Linux build, but Mars Hub never constructs
 /// it — it passes mars_sync's FileSyncKeyStore instead.
 const _exceptions = {
   'lib/sync/secure_sync_key_store.dart': ['package:flutter_secure_storage/'],
 };
 
 void main() {
-  test('code shared with the desktop hub imports nothing phone-only', () {
+  test('code shared with Mars Hub imports nothing phone-only', () {
     final violations = <String>[];
     for (final root in _shared) {
       final files = FileSystemEntity.isDirectorySync(root)

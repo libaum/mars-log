@@ -161,7 +161,7 @@ class JournalManager {
     // lost, so it becomes an entry of its own.
     if (start == null) return createFromAudio(rec);
     // Trashed elsewhere while recording: a new recording is newer intent than
-    // the trashing, so the entry comes back (as typing does in the hub).
+    // the trashing, so the entry comes back (as typing does in Mars Hub).
     start
       ..deletedAt = null
       ..audioFileNames = [...start.audioFileNames, rec.fileName]

@@ -90,7 +90,7 @@ class ExportService {
   /// left alone), the location history (see
   /// [LocationHistoryRepository.mergeExported]), and every recording an
   /// entry points to but this device doesn't hold — which also brings the
-  /// audio back for entries a re-pair pulled from the sync hub. Returns the
+  /// audio back for entries a re-pair pulled from the relay. Returns the
   /// number of newly imported entries, or null if cancelled.
   Future<int?> importFromPicker() async {
     // FileType.any (not custom/zip): Android's extension filter greys out

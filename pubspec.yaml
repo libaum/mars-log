@@ -35,7 +35,7 @@ dependencies:
   saf_stream: ^4.0.1
   flutter_map: ^8.3.2
   latlong2: ^0.10.1
-  # E2E sync to the owner's hub. Path dependency: personal build only, never
+  # E2E sync to the owner's relay. Path dependency: personal build only, never
   # published — see ../SYNC.md.
   mars_sync:
     path: ../mars_sync
