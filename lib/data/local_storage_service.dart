@@ -28,6 +28,7 @@ class LocalStorageService {
   //   other's tombstones. (On the phone the apps have separate prefs; the
   //   prefix just costs nothing there.)
   static const _keySyncServerUrl = 'sync_server_url';
+  static const _keySyncPaired = 'log_sync_paired';
   static const _keySyncPurged = 'log_sync_purged';
   static const _keySyncLastSyncedAt = 'log_sync_last_synced_at';
   static const _keySyncLastSeenSeq = 'log_sync_last_seen_seq';
@@ -177,6 +178,14 @@ class LocalStorageService {
       await _prefs.setString(_keySyncServerUrl, url);
     }
   }
+
+  /// Whether the last pairing rebuild found URL, device token and key all
+  /// present — mirrored here because those secrets are only readable async,
+  /// and the journal decides on its 30-day purge synchronously at load.
+  /// Null on a device that hasn't run a rebuild since this flag existed.
+  bool? getSyncPaired() => _prefs.getBool(_keySyncPaired);
+
+  Future<void> setSyncPaired(bool paired) => _prefs.setBool(_keySyncPaired, paired);
 
   DateTime? getSyncLastSyncedAt() {
     final ms = _prefs.getInt(_keySyncLastSyncedAt);

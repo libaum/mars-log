@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mars_log/sync/sync_purge_trace.dart';
 import 'package:mars_log/sync/sync_service.dart';
 import 'package:mars_sync/mars_sync.dart';
 
@@ -207,6 +208,38 @@ void main() {
       expect(sync.statusNotifier.value.phase, SyncPhase.error,
           reason: 'the stale rebuild pointed the engine back at relay A');
       expect(relayB.row('x'), isNull, reason: 'pushed to relay B with a key B never saw');
+    });
+  });
+
+  group('the 30-day purge waits only while paired', () {
+    test('a relay URL without a key does not defer it', () async {
+      await phone.run((journal, storage) async {
+        final sync = SyncService(
+          storage: storage,
+          journal: journal,
+          keys: _MemoryKeys(),
+          transport: (uri, token) => FakeTransport(relayFor(uri), 'phone'),
+        );
+        await sync.init();
+        await sync.pairDevice(serverUrl: 'https://a', token: 't');
+        expect(sync.statusNotifier.value.isPaired, isFalse);
+        expect(SyncPurgeTrace(storage).defersAutoPurge, isFalse);
+
+        await sync.importEncryptionKey(keyA);
+        expect(sync.statusNotifier.value.isPaired, isTrue);
+        expect(SyncPurgeTrace(storage).defersAutoPurge, isTrue);
+
+        await sync.unpair();
+        expect(SyncPurgeTrace(storage).defersAutoPurge, isFalse);
+      });
+    });
+
+    test('before the first rebuild after the update, a stored URL still defers', () async {
+      await phone.run((journal, storage) async {
+        await storage.setSyncServerUrl('https://a');
+        expect(storage.getSyncPaired(), isNull);
+        expect(SyncPurgeTrace(storage).defersAutoPurge, isTrue);
+      });
     });
   });
 }

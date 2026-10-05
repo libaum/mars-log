@@ -276,7 +276,9 @@ class SyncService {
     _deviceId = deviceId;
     _encryptor = key != null ? SyncEncryptor.importKey(key) : null;
 
-    if (_client == null || _encryptor == null || deviceId == null) {
+    final paired = _client != null && _encryptor != null && deviceId != null;
+    await _storage.setSyncPaired(paired);
+    if (!paired) {
       _engine = null;
       _publish(SyncPhase.unpaired);
       return;

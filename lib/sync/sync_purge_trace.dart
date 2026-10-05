@@ -22,6 +22,11 @@ class SyncPurgeTrace implements PurgeTrace {
     _storage.setSyncPurged(purged);
   }
 
+  /// Paired means URL, device token and key — a URL alone never completes a
+  /// round, so deferring on it would keep the trash forever. Before the first
+  /// rebuild after an update the flag is missing; fall back to the URL then,
+  /// so a paired phone doesn't purge at load ahead of its first round.
   @override
-  bool get defersAutoPurge => _storage.getSyncServerUrl() != null;
+  bool get defersAutoPurge =>
+      _storage.getSyncPaired() ?? _storage.getSyncServerUrl() != null;
 }
