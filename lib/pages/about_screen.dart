@@ -5,7 +5,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 // Shared across all Mars apps (single Play Console developer account).
 const _MARS_DEV_PAGE = 'https://play.google.com/store/apps/dev?id=7784376568737667246';
-const _SUPPORT_EMAIL = 'contact@catchingclouds.de';
+const _SUPPORT_EMAIL = 'contact@catchingcomets.dev';
 // Not yet on the Play Store — add a "Rate Mars Log" link on publish
 // (applicationId com.catchingclouds.marslog).
 
