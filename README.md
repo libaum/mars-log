@@ -1,50 +1,37 @@
 # Mars Log
 
-Voice journal. Talk, and it writes itself.
+A voice journal. Open it, talk, leave.
 
-Open Mars Log, speak, and leave. The recording is your permanent record; from it
-a transcript, a short summary, a mood, and a few tags are derived — so a spoken
-minute becomes something you can read back later. Audio and transcript are the
-source of truth; everything derived can be recomputed with a better prompt.
+The recording is the permanent record. From it the app derives a transcript, a short summary, a mood and a few tags, so a spoken minute becomes something you can read back later. Audio and transcript are the source of truth, everything derived can be recomputed.
 
-Locked behind a PIN or your fingerprint. Nothing leaves the device except the
-audio sent for transcription.
+Status: in development, not on Google Play yet.
 
-> Early development — the domain and storage layers exist; the UI is being built.
+## What it does
 
-## Features
-
-- **Talk, don't type** — record a thought, the entry writes itself
-- **Derived, not manual** — transcript · summary · mood · tags
-- **Yours to keep** — audio + transcript stored locally, exportable as a zip
-- **Locked** — PIN and biometric unlock
-- **Light & dark mode** — double-tap to toggle; follows system by default
-- **Private** — no accounts, no tracking, no ads
+- Record a thought and the entry writes itself: transcript, summary, mood, tags.
+- Stats and a map of your entries.
+- Audio and transcript stay on the device and can be exported as a zip.
+- Locked behind a PIN or your fingerprint.
+- Deleted entries go to a trash first.
+- Dark and light mode (double tap). No accounts, no tracking, no ads.
 
 ## Setup
 
-Transcription and analysis run through the Gemini API (paid tier): set the
-API key in Settings. Recordings and transcripts go to Google for that; the
-audio stays on the phone as well.
+Transcription and analysis run through the Gemini API (paid tier). Put your API key in Settings. Recordings and transcripts are sent to Google for that. Nothing else leaves the phone, and the audio stays on the device as well.
 
-## Install
+## Build
+
+You need the [Flutter SDK](https://docs.flutter.dev/get-started/install).
 
 ```bash
-./install_debug.sh     # Debug (installs as "Mars Log Debug")
+./install_debug.sh      # "Mars Log Debug"
 ```
 
-## Tech Stack
+## Under the hood
 
-- Flutter / Dart
-- GetIt (dependency injection)
-- ValueNotifier + ValueListenableBuilder (state)
-- SharedPreferences + flutter_secure_storage (local & encrypted persistence)
-- `record` (audio) · Gemini API (transcript, analysis, people) · `connectivity_plus` (retry when back online) · `local_auth` (unlock)
+Flutter and Dart, GetIt for DI, `ValueNotifier` for state, SharedPreferences and `flutter_secure_storage` for storage. `record` for audio, `local_auth` for the unlock, `connectivity_plus` to retry when back online. See [CLAUDE.md](CLAUDE.md).
 
-## Design
-
-Part of the Mars product family. Pure black & white, Outfit font, light weights,
-no visual clutter.
+Part of [Mars](https://github.com/libaum/mars), a family of small, calm apps.
 
 ## License
 
