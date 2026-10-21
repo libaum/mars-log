@@ -9,6 +9,7 @@ import 'package:mars_log/logic/lock_manager.dart';
 import 'package:mars_log/pages/lock_screen.dart';
 import 'package:mars_log/pages/main_screen.dart';
 import 'package:mars_log/services/service_locator.dart';
+import 'package:mars_log/logic/usage_tracking_manager.dart';
 import 'package:mars_log/sync/sync_service.dart';
 import 'package:mars_log/theme/theme_manager.dart';
 
@@ -81,6 +82,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
   final _lock = getIt<LockManager>();
   final _journal = getIt<JournalManager>();
   final _sync = getIt<SyncService>();
+  final _usage = getIt<UsageTrackingManager>();
   StreamSubscription<List<ConnectivityResult>>? _connectivity;
 
   @override
@@ -117,7 +119,9 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
       _sync.syncNow();
     } else if (state == AppLifecycleState.resumed) {
       _journal.resumePending(now: true);
-      _sync.syncNow();
+      // Back from granting usage access, or just a fresh stretch of use:
+      // collect first, so the round carries it.
+      _usage.refresh().whenComplete(_sync.syncNow);
     }
   }
 

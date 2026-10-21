@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:mars_sync/mars_sync.dart';
 import 'package:mars_log/data/journal_repository.dart';
 import 'package:mars_log/data/local_storage_service.dart';
+import 'package:mars_log/data/usage_repository.dart';
 import 'package:mars_log/sync/journal_sync_repository.dart';
 import 'package:mars_log/sync/secure_sync_key_store.dart';
 
@@ -46,6 +47,7 @@ class SyncSetupException implements Exception {
 class SyncService {
   final LocalStorageService _storage;
   final JournalRepository _journal;
+  final UsageRepository? _usage;
   final SyncKeyStore _keys;
 
   final statusNotifier = ValueNotifier<SyncStatus>(
@@ -67,14 +69,16 @@ class SyncService {
   Future<void>? _inFlight;
 
   /// [keys] defaults to the Android Keystore-backed store; Mars Hub
-  /// passes a file-backed one.
+  /// passes a file-backed one. [usage]: the phone-usage days, synced along.
   SyncService({
     required LocalStorageService storage,
     required JournalRepository journal,
+    UsageRepository? usage,
     SyncKeyStore? keys,
     @visibleForTesting SyncTransport Function(Uri baseUrl, String token)? transport,
   })  : _storage = storage,
         _journal = journal,
+        _usage = usage,
         _keys = keys ?? SecureSyncKeyStore(),
         _transport = transport ??
             ((baseUrl, token) => SyncClient(baseUrl: baseUrl, deviceToken: token));
@@ -289,6 +293,7 @@ class SyncService {
         journal: _journal,
         storage: _storage,
         deviceId: deviceId,
+        usage: _usage,
       ),
       client: _client!,
       encryptor: _encryptor!,

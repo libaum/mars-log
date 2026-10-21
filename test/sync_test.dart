@@ -5,10 +5,12 @@ import 'dart:math';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mars_log/data/journal_repository.dart';
 import 'package:mars_log/data/local_storage_service.dart';
+import 'package:mars_log/data/usage_repository.dart';
 import 'package:mars_log/domain/analysis_basis.dart';
 import 'package:mars_log/domain/insight.dart';
 import 'package:mars_log/domain/journal_entry.dart';
 import 'package:mars_log/domain/people_aliases.dart';
+import 'package:mars_log/domain/usage_day.dart';
 import 'package:mars_log/sync/journal_sync_repository.dart';
 import 'package:mars_log/sync/sync_purge_trace.dart';
 import 'package:mars_sync/mars_sync.dart';
@@ -98,12 +100,16 @@ class Device {
     return result;
   }
 
-  Future<SyncResult> sync(FakeRelay relay, SyncEncryptor key) => run(
-        (journal, storage) => MarsSyncEngine(
+  /// The phone-usage record, synced along when [withUsage].
+  Future<UsageRepository> usage() => UsageRepository.open(directory: dir);
+
+  Future<SyncResult> sync(FakeRelay relay, SyncEncryptor key, {bool withUsage = false}) => run(
+        (journal, storage) async => MarsSyncEngine(
           repository: JournalSyncRepository(
             journal: journal,
             storage: storage,
             deviceId: id,
+            usage: withUsage ? await usage() : null,
           ),
           client: FakeTransport(relay, id),
           encryptor: key,
@@ -1076,6 +1082,56 @@ void main() {
       await laptop.sync(relay, key);
       await phone.sync(relay, key);
       expect(await phone.run((j, _) async => j.aliases.canonical('Wincent')), 'Wincent');
+    });
+  });
+
+  group('phone usage', () {
+    UsageEvent open(int hour) => UsageEvent(
+        DateTime(2026, 10, 21, hour).millisecondsSinceEpoch,
+        'com.whatsapp',
+        UsageEventType.activityResumed);
+
+    test('days and labels reach the laptop, as days — not entries', () async {
+      final usage = await phone.usage();
+      await usage.addEvents([open(9)]);
+      await usage.addLabels({'com.whatsapp': 'WhatsApp'});
+      await phone.sync(relay, key, withUsage: true);
+      await laptop.sync(relay, key, withUsage: true);
+
+      final there = await laptop.usage();
+      expect((await there.day('2026-10-21'))!.events, [open(9)]);
+      expect((await there.apps()).labels['com.whatsapp'], 'WhatsApp');
+      expect(await laptop.run((j, _) async => j.allEntries), isEmpty);
+
+      // Later the same day: the phone collects more, the day goes again.
+      await tick();
+      await usage.addEvents([open(9), open(14)]);
+      final result = await phone.sync(relay, key, withUsage: true);
+      expect(result.pushed, 1, reason: 'only the day that changed');
+      await laptop.sync(relay, key, withUsage: true);
+      expect((await there.day('2026-10-21'))!.events, [open(9), open(14)]);
+    });
+
+    test('a build without usage leaves the items alone', () async {
+      await (await phone.usage()).addEvents([open(9)]);
+      await phone.sync(relay, key, withUsage: true);
+      await laptop.sync(relay, key);
+      expect(await (await laptop.usage()).days(), isEmpty);
+      expect(await laptop.run((j, _) async => j.allEntries), isEmpty);
+    });
+
+    test('a day too big for the relay stays home instead of sinking the push',
+        () async {
+      final usage = await phone.usage();
+      final start = DateTime(2026, 10, 21).millisecondsSinceEpoch;
+      await usage.addEvents([
+        for (var i = 0; i < 20000; i++)
+          UsageEvent(start + i * 997, 'app.$i', UsageEventType.activityResumed),
+      ]);
+      await phone.run((j, _) => j.upsert(entry('a')));
+      await phone.sync(relay, key, withUsage: true);
+      expect(relay.row('usage:2026-10-21'), isNull);
+      expect(relay.row('a'), isNotNull);
     });
   });
 }

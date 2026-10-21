@@ -1,11 +1,13 @@
 import 'package:mars_log/logic/daily_export_manager.dart';
 import 'package:mars_log/logic/location_tracking_manager.dart';
+import 'package:mars_log/logic/usage_tracking_manager.dart';
 import 'package:workmanager/workmanager.dart';
 
 /// Task names of every periodic job the app registers. They are matched
 /// inside [backgroundCallbackDispatcher], so a name only ever lives here.
 const kLocationTaskName = 'captureLocation';
 const kDailyExportTaskName = 'dailyExport';
+const kUsageTaskName = 'collectUsage';
 
 /// The app's single WorkManager entry point.
 ///
@@ -27,6 +29,8 @@ void backgroundCallbackDispatcher() {
         await captureLocationFix();
       case kDailyExportTaskName:
         await runDailyExport();
+      case kUsageTaskName:
+        await collectUsage();
     }
     return true;
   });

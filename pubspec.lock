@@ -1121,6 +1121,13 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "3.1.6"
+  usage_access:
+    dependency: "direct main"
+    description:
+      path: "packages/usage_access"
+      relative: true
+    source: path
+    version: "0.1.0"
   uuid:
     dependency: transitive
     description:

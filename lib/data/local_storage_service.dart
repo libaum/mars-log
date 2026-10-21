@@ -16,6 +16,7 @@ class LocalStorageService {
   static const _keyMonthReviewPrefix = 'month_review_';
   static const _keyLocationTrackingEnabled = 'location_tracking_enabled';
   static const _keyDailyExportEnabled = 'daily_export_enabled';
+  static const _keyUsageTrackingEnabled = 'usage_tracking_enabled';
   static const _keyDailyExportFolderUri = 'daily_export_folder_uri';
   static const _keyDailyExportFolderName = 'daily_export_folder_name';
   // Sync keys come in two kinds, and the difference matters in Mars Hub,
@@ -112,6 +113,12 @@ class LocalStorageService {
       _prefs.getBool(_keyLocationTrackingEnabled) ?? false;
   Future<void> setLocationTrackingEnabled(bool v) =>
       _prefs.setBool(_keyLocationTrackingEnabled, v);
+
+  /// Phone usage recording — see [UsageTrackingManager].
+  bool getUsageTrackingEnabled() =>
+      _prefs.getBool(_keyUsageTrackingEnabled) ?? false;
+  Future<void> setUsageTrackingEnabled(bool v) =>
+      _prefs.setBool(_keyUsageTrackingEnabled, v);
 
   /// Daily automatic backup into a user-chosen (SAF) folder — see
   /// [DailyExportManager]. The URI is the persisted SAF tree permission; the

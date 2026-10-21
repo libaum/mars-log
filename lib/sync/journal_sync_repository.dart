@@ -1,8 +1,12 @@
+import 'dart:convert';
+
 import 'package:mars_log/data/journal_repository.dart';
 import 'package:mars_log/data/local_storage_service.dart';
+import 'package:mars_log/data/usage_repository.dart';
 import 'package:mars_log/domain/insight.dart';
 import 'package:mars_log/domain/journal_entry.dart';
 import 'package:mars_log/domain/people_aliases.dart';
+import 'package:mars_log/domain/usage_day.dart';
 import 'package:mars_sync/mars_sync.dart';
 
 /// Maps journal entries onto mars_sync's generic [SyncItem]s.
@@ -15,19 +19,31 @@ import 'package:mars_sync/mars_sync.dart';
 /// Moving to the trash is an ordinary edit and syncs like one. A *purge* —
 /// manual, or the 30-day trash retention — is the only thing that becomes a
 /// tombstone; [SyncPurgeTrace] records it, this class pushes it.
+///
+/// Phone usage rides along: one item per day (`usage:2026-10-21`) and one
+/// for the app labels ([kUsageAppsId]). Written only on the phone, merged
+/// as sets wherever they land, never deleted.
 class JournalSyncRepository implements SyncRepository {
   static const _moduleId = 'mars_log';
 
+  /// The relay refuses a payload over 256 KB — and with it the whole push.
+  /// Encrypted and base64'd, this much plaintext stays under it.
+  static const maxUsagePayloadChars = 170 * 1024;
+
   final JournalRepository _journal;
   final LocalStorageService _storage;
+  final UsageRepository? _usage;
   final String _deviceId;
 
+  /// [usage]: null leaves usage items out both ways.
   JournalSyncRepository({
     required JournalRepository journal,
     required LocalStorageService storage,
     required String deviceId,
+    UsageRepository? usage,
   })  : _journal = journal,
         _storage = storage,
+        _usage = usage,
         _deviceId = deviceId;
 
   @override
@@ -118,6 +134,39 @@ class JournalSyncRepository implements SyncRepository {
       );
     }
 
+    final usage = _usage;
+    if (usage != null) {
+      for (final day in await usage.changedSince(since)) {
+        final payload = day.toJson();
+        // A day that big would sink every other item in the push. Not seen
+        // in practice (a heavy day is ~40 KB); it stays on the phone and in
+        // the export.
+        if (jsonEncode(payload).length > maxUsagePayloadChars) continue;
+        items.add(
+          SyncItem(
+            itemId: day.id,
+            moduleId: _moduleId,
+            deviceId: _deviceId,
+            updatedAt: day.changedAt,
+            payload: payload,
+          ),
+        );
+      }
+      final apps = await usage.apps();
+      final appsAt = apps.changedAt;
+      if (appsAt != null && (since == null || !appsAt.isBefore(since))) {
+        items.add(
+          SyncItem(
+            itemId: kUsageAppsId,
+            moduleId: _moduleId,
+            deviceId: _deviceId,
+            updatedAt: appsAt,
+            payload: apps.toJson(),
+          ),
+        );
+      }
+    }
+
     for (final MapEntry(key: id, value: mark) in _storage.getSyncPurged().entries) {
       // Filtered by when it was recorded, but competing with its stamp —
       // see PurgeMark.
@@ -151,7 +200,22 @@ class JournalSyncRepository implements SyncRepository {
     final analyses = <SyncedAnalysis>[];
     final insights = <Insight>[];
     PeopleAliases? aliases;
+    final usageDays = <UsageDay>[];
+    UsageApps? usageApps;
     for (final item in items) {
+      if (item.itemId.startsWith(kUsageItemPrefix)) {
+        if (item.isDeleted || item.payload['id'] != item.itemId) continue;
+        try {
+          if (item.itemId == kUsageAppsId) {
+            usageApps = UsageApps.fromJson(item.payload)..changedAt = item.updatedAt;
+          } else {
+            usageDays.add(UsageDay.fromJson(item.payload)..changedAt = item.updatedAt);
+          }
+        } on Object {
+          continue; // a newer build's shape — see the entry case below
+        }
+        continue;
+      }
       if (item.itemId == kPeopleAliasesId) {
         if (item.isDeleted || item.payload['id'] != item.itemId) continue;
         try {
@@ -211,6 +275,15 @@ class JournalSyncRepository implements SyncRepository {
     await _journal.applySynced(upserts, removed, analyses: analyses);
     if (insights.isNotEmpty) await _journal.applySyncedInsights(insights);
     if (aliases != null) await _journal.applySyncedAliases(aliases);
+    final usage = _usage;
+    if (usage != null) {
+      for (final day in usageDays) {
+        await usage.applySynced(day);
+      }
+      if (usageApps != null) {
+        await usage.applySyncedApps(usageApps);
+      }
+    }
   }
 
   @override

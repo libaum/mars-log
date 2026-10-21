@@ -9,6 +9,7 @@ import 'package:mars_log/domain/journal_entry.dart';
 import 'package:mars_log/logic/daily_export_manager.dart';
 import 'package:mars_log/logic/journal_manager.dart';
 import 'package:mars_log/logic/location_tracking_manager.dart';
+import 'package:mars_log/logic/usage_tracking_manager.dart';
 import 'package:mars_log/logic/notification_manager.dart';
 import 'package:mars_log/logic/settings_manager.dart';
 import 'package:mars_log/logic/lock_manager.dart';
@@ -37,6 +38,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final _journal = getIt<JournalManager>();
   final _notifications = getIt<NotificationManager>();
   final _locationTracking = getIt<LocationTrackingManager>();
+  final _usageTracking = getIt<UsageTrackingManager>();
   final _dailyExport = getIt<DailyExportManager>();
   final _timelineImport = getIt<GoogleTimelineImportService>();
   bool _importingTimeline = false;
@@ -139,6 +141,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
       case LocationTrackingResult.enabled:
         break;
     }
+  }
+
+  static const _usageDescription =
+      'Bildschirmzeit, Entsperren und Apps — gespeichert für spätere Statistiken';
+
+  Future<String> _usageStatus(bool enabled, bool access) async {
+    if (!enabled) return _usageDescription;
+    if (!access) return 'Zugriff fehlt — ohne ihn wird nichts erfasst';
+    final days = await _usageTracking.storedDays();
+    final last = await _usageTracking.lastCollected();
+    final at = last == null
+        ? 'noch nicht gesammelt'
+        : 'zuletzt ${last.hour.toString().padLeft(2, '0')}:'
+            '${last.minute.toString().padLeft(2, '0')}';
+    return '$days ${days == 1 ? 'Tag' : 'Tage'} gespeichert · $at';
   }
 
   Future<void> _importTimeline() async {
@@ -371,6 +388,30 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     'Erfasst mehrmals täglich deinen Standort im Hintergrund',
                     enabled,
                     () => _toggleLocationTracking(!enabled),
+                  ),
+                ),
+                ValueListenableBuilder<bool>(
+                  valueListenable: _usageTracking.enabledNotifier,
+                  builder: (context, enabled, _) => ValueListenableBuilder<bool>(
+                    valueListenable: _usageTracking.accessNotifier,
+                    builder: (context, access, _) => Column(
+                      children: [
+                        FutureBuilder<String>(
+                          future: _usageStatus(enabled, access),
+                          builder: (context, status) => _toggleRow(
+                            'Handynutzung aufzeichnen',
+                            status.data ?? _usageDescription,
+                            enabled,
+                            () => _usageTracking.setEnabled(!enabled),
+                          ),
+                        ),
+                        if (enabled && !access)
+                          _actionRow(
+                            'Nutzungsdatenzugriff erlauben',
+                            _usageTracking.openAccessSettings,
+                          ),
+                      ],
+                    ),
                   ),
                 ),
                 _actionRow(

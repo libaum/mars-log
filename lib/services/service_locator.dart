@@ -7,6 +7,7 @@ import 'package:mars_log/data/journal_repository.dart';
 import 'package:mars_log/data/local_storage_service.dart';
 import 'package:mars_log/data/gemini_engine.dart';
 import 'package:mars_log/data/secure_storage_service.dart';
+import 'package:mars_log/data/usage_repository.dart';
 import 'package:mars_log/logic/analysis_task_service.dart';
 import 'package:mars_log/logic/background_tasks.dart';
 import 'package:mars_log/data/google_timeline_import_service.dart';
@@ -19,6 +20,7 @@ import 'package:mars_log/logic/lock_manager.dart';
 import 'package:mars_log/logic/notification_manager.dart';
 import 'package:mars_log/logic/recording_manager.dart';
 import 'package:mars_log/logic/settings_manager.dart';
+import 'package:mars_log/logic/usage_tracking_manager.dart';
 import 'package:mars_log/sync/sync_purge_trace.dart';
 import 'package:mars_log/sync/sync_service.dart';
 import 'package:mars_log/theme/theme_manager.dart';
@@ -37,8 +39,15 @@ Future<void> setupServiceLocator() async {
   );
   getIt.registerSingleton<JournalRepository>(journal);
 
+  final usage = await UsageRepository.open();
+  getIt.registerSingleton<UsageRepository>(usage);
+
   // Never throws; an unpaired or broken pairing just reports it in status.
-  final sync = SyncService(storage: getIt<LocalStorageService>(), journal: journal);
+  final sync = SyncService(
+    storage: getIt<LocalStorageService>(),
+    journal: journal,
+    usage: usage,
+  );
   await sync.init();
   getIt.registerSingleton<SyncService>(sync);
   getIt.registerSingleton<LocationHistoryRepository>(
@@ -69,6 +78,7 @@ Future<void> setupServiceLocator() async {
     ExportService(
       getIt<JournalRepository>(),
       getIt<LocationHistoryRepository>(),
+      usage: usage,
     ),
   );
   getIt.registerSingleton<LockManager>(LockManager());
@@ -81,6 +91,10 @@ Future<void> setupServiceLocator() async {
   final locationTracking = LocationTrackingManager();
   getIt.registerSingleton<LocationTrackingManager>(locationTracking);
   await locationTracking.init();
+
+  final usageTracking = UsageTrackingManager(usage);
+  getIt.registerSingleton<UsageTrackingManager>(usageTracking);
+  await usageTracking.init();
 
   final dailyExport = DailyExportManager();
   getIt.registerSingleton<DailyExportManager>(dailyExport);

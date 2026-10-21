@@ -20,6 +20,8 @@ Mars Log is a voice journal. Open → tap the circle → talk → done. On stop,
 
 **Stats:** everything in `lib/domain/stats.dart` / `place_stats.dart` is plain computation, recomputed on every journal change — no AI. The one written evaluation over everything ("Auswertung", sync item `insight:all`, model `Insight` in `lib/domain/insight.dart`, stored in `insights.json` next to `entries.json`) is made on the laptop by Mars Hub with Claude Code and only synced here. Places: grid cells within 400 m fold into the densest one, then clusters geocoded to the same "Stadt, Stadtteil" merge.
 
+**Phone usage:** Settings → "Handynutzung aufzeichnen" records Android's raw usage events (app resumed/paused, screen on/off, lock screen shown/hidden, foreground services, notifications if the system hands them out, device start/stop — `UsageEventType` in `lib/domain/usage_day.dart`) for stats later; nothing is evaluated or shown yet. Android keeps these events only about a week, so `collectUsage` (`lib/logic/usage_tracking_manager.dart`) copies them every 6 h (WorkManager) and on every start/resume, re-reading one day of overlap (merging is idempotent). One file per local day, `usage/days/2026-10-21.json` (compact: package table + Δ-coded triples), labels in `usage/apps.json`, the collection mark in `usage/state.json` (`UsageRepository`, shared with Mars Hub). Needs the special "usage access" (`PACKAGE_USAGE_STATS`, granted in system settings) — read through the local plugin `packages/usage_access/` (Kotlin; a plugin rather than a channel in `MainActivity` so the WorkManager engine has it too). Syncs as `usage:<day>` + `usage:apps` items (merged as sets, never deleted; a day over ~170 KB stays home so it can't sink a push) and goes into the export zip.
+
 ## Common Commands
 
 ```bash
@@ -44,7 +46,7 @@ Managers expose state via `ValueNotifier`; UI subscribes with `ValueListenableBu
 | `LocalStorageService` | SharedPreferences: theme + lock flags + analysis version + reminder + "delete audio after transcription" flag (non-sensitive) |
 | `SecureStorageService` | flutter_secure_storage: Gemini API key, PIN hash (sha256); deletes the old Mistral key on start |
 | `GeminiEngine` (`AnalysisEngine`) | `transcribe` (audio inline as base64 up to ~14 MB, above that the Files API with resumable upload, deleted afterwards; one call per recording, the transcript as a JSON field so the model's notes can't leak into it; a cut-off answer — `finishReason` ≠ STOP — is an error), `analyzeText`, `extractPeople`, `summarizeMonth`. Plain `dart:io` `HttpClient`, key in the `x-goog-api-key` header, `thinkingLevel: low`. `kAnalysisVersion` 5, `kPeopleVersion` 1 |
-| `ExportService` | Zip export (`entries.json`, `location_history.json`, `audio/`) built on disk and copied into a SAF folder (manual "Export" and the daily backup); streamed import merges entries by id and restores missing audio |
+| `ExportService` | Zip export (`entries.json`, `location_history.json`, `usage/`, `audio/`) built on disk and copied into a SAF folder (manual "Export" and the daily backup); streamed import merges entries by id and restores missing audio |
 | `RecordingManager` | Microphone lifecycle; records AAC `.m4a` 16 kHz mono 64 kbps (~0.5 MB/min); timer |
 | `LocationService` | Best-effort GPS + reverse-geocoded label for a new entry; silent/nullable, never throws |
 | `NotificationManager` | Optional evening reminder; schedules a rolling window of one-shots, skipping days that already have a log |
@@ -53,6 +55,7 @@ Managers expose state via `ValueNotifier`; UI subscribes with `ValueListenableBu
 | `SettingsManager` | PIN/biometric toggles |
 | `LockManager` | Optional PIN/biometric gate; re-locks on app resume |
 | `ThemeManager` | Light/dark following system (Mars pattern) |
+| `UsageRepository` / `UsageTrackingManager` | Phone usage record (see above): per-day event files; toggle, access check, periodic `collectUsage` |
 
 ### Recording → analysis flow
 Tap stop ("Senden") → `RecordingManager.stop()` returns a `RecordingResult` → `JournalManager.createFromAudio` writes a provisional `analyzing` entry (the recording in `untranscribed`) → the self-rating sheet opens (setting "after") → best-effort `LocationService` stamp → `_process`: transcribe (stored at once) → analyse → people → `ready`. A passing error → `pending` (retried), anything else → `failed`. On success, if "delete audio after transcription" is on, the audio is discarded.

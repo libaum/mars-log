@@ -1,0 +1,20 @@
+name: usage_access
+description: "Mars Log's window onto Android's UsageStatsManager: raw usage events and app labels."
+publish_to: 'none'
+version: 0.1.0
+
+environment:
+  sdk: ^3.12.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+# Android only. A Flutter plugin (not a channel in MainActivity) so the
+# WorkManager background engine, which starts without an activity, has it too.
+flutter:
+  plugin:
+    platforms:
+      android:
+        package: com.catchingclouds.usage_access
+        pluginClass: UsageAccessPlugin

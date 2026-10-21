@@ -13,6 +13,7 @@ const _shared = [
   'lib/domain',
   'lib/data/journal_repository.dart',
   'lib/data/local_storage_service.dart',
+  'lib/data/usage_repository.dart',
   'lib/sync',
 ];
 
@@ -26,6 +27,7 @@ const _allowed = [
   'package:mars_log/domain/',
   'package:mars_log/data/journal_repository.dart',
   'package:mars_log/data/local_storage_service.dart',
+  'package:mars_log/data/usage_repository.dart',
   'package:mars_log/sync/',
 ];
 

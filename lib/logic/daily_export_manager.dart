@@ -3,6 +3,7 @@ import 'package:mars_log/data/export_service.dart';
 import 'package:mars_log/data/journal_repository.dart';
 import 'package:mars_log/data/local_storage_service.dart';
 import 'package:mars_log/data/location_history_repository.dart';
+import 'package:mars_log/data/usage_repository.dart';
 import 'package:mars_log/logic/background_tasks.dart';
 import 'package:mars_log/services/service_locator.dart';
 import 'package:saf_util/saf_util.dart';
@@ -33,7 +34,8 @@ Future<void> runDailyExport() async {
     final repo = await JournalRepository.getInstance(readOnly: true);
     final locations = await LocationHistoryRepository.getInstance();
     final stamp = DateTime.now().toIso8601String().split('T').first;
-    await ExportService(repo, locations)
+    final usage = await UsageRepository.open();
+    await ExportService(repo, locations, usage: usage)
         .exportTo(folderUri, '$_backupPrefix$stamp.zip', overwrite: true);
 
     await _pruneOldBackups(folderUri);

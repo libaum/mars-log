@@ -39,6 +39,9 @@ dependencies:
   # published — see ../SYNC.md.
   mars_sync:
     path: ../mars_sync
+  # Android's UsageStatsManager, for the phone usage record.
+  usage_access:
+    path: packages/usage_access
 
 dev_dependencies:
   flutter_test:

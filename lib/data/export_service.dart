@@ -7,8 +7,10 @@ import 'package:saf_stream/saf_stream.dart';
 import 'package:saf_util/saf_util.dart';
 import 'package:mars_log/data/journal_repository.dart';
 import 'package:mars_log/data/location_history_repository.dart';
+import 'package:mars_log/data/usage_repository.dart';
 import 'package:mars_log/domain/day_location_point.dart';
 import 'package:mars_log/domain/journal_entry.dart';
+import 'package:mars_log/domain/usage_day.dart';
 
 /// Zips the whole journal for backup, and restores it again:
 ///
@@ -16,6 +18,7 @@ import 'package:mars_log/domain/journal_entry.dart';
 ///   unreadable, see [JournalRepository.corruptIndexFiles])
 /// - `location_history.json` — the background location history, which
 ///   doesn't sync
+/// - `usage/days/*.json`, `usage/apps.json` — the phone usage record
 /// - `audio/` — every recording an entry points to, trash included. Audio
 ///   syncs nowhere, so this is its only copy off the phone.
 ///
@@ -25,11 +28,15 @@ import 'package:mars_log/domain/journal_entry.dart';
 class ExportService {
   final JournalRepository _repository;
   final LocationHistoryRepository _locations;
+  final UsageRepository? _usage;
 
-  ExportService(this._repository, this._locations);
+  ExportService(this._repository, this._locations, {UsageRepository? usage})
+      : _usage = usage;
 
   static const _mime = 'application/zip';
   static const _audioPrefix = 'audio/';
+  static const _usageDaysPrefix = 'usage/days/';
+  static const _usageAppsName = 'usage/apps.json';
 
   /// Builds the backup zip in the temp dir and returns it. The caller deletes
   /// it once copied.
@@ -50,6 +57,15 @@ class ExportService {
     final locations = _locations.file;
     if (await locations.exists()) {
       await encoder.addFile(locations, 'location_history.json');
+    }
+    final usage = _usage;
+    if (usage != null) {
+      for (final day in await usage.dayFiles()) {
+        await encoder.addFile(day, '$_usageDaysPrefix${day.uri.pathSegments.last}');
+      }
+      if (await usage.appsFile.exists()) {
+        await encoder.addFile(usage.appsFile, _usageAppsName);
+      }
     }
     final audio = _repository.allEntries.expand((e) => e.audioFileNames).toSet();
     for (final name in audio) {
@@ -124,6 +140,26 @@ class ExportService {
             for (final p in day as List<dynamic>)
               DayLocationPoint.fromJson((p as Map).cast<String, dynamic>()),
         ]);
+      }
+
+      final usage = _usage;
+      if (usage != null) {
+        for (final file in archive) {
+          if (!file.isFile) continue;
+          final isDay = file.name.startsWith(_usageDaysPrefix);
+          if (!isDay && file.name != _usageAppsName) continue;
+          try {
+            final json = (jsonDecode(utf8.decode(file.content as List<int>)) as Map)
+                .cast<String, dynamic>();
+            if (isDay) {
+              await usage.applySynced(UsageDay.fromJson(json));
+            } else {
+              await usage.applySyncedApps(UsageApps.fromJson(json));
+            }
+          } on Object {
+            continue; // one broken day doesn't cost the rest of the import
+          }
+        }
       }
 
       var imported = <JournalEntry>[];
