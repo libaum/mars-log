@@ -548,6 +548,11 @@ class JournalRepository {
     if (!live.titleByHand && result.title.isNotEmpty) live.title = result.title;
     if (!live.summaryByHand) live.summary = result.summary;
     if (!live.tagsByHand) live.tags = result.tags;
+    if (result.notes.isNotEmpty) {
+      live
+        ..notes = result.notes
+        ..notesModel = model;
+    }
     live
       ..moodLabel = result.moodLabel
       ..moodScore = result.moodScore
@@ -585,6 +590,29 @@ class JournalRepository {
         !live.titleByHand && trimmed.isNotEmpty && (live.title ?? '').isEmpty;
     if (!newTitle) return true;
     live.title = trimmed;
+    await saveAnalysis(live, entryChanged: false);
+    return true;
+  }
+
+  /// Fills in the missing [JournalEntry.notes] of an entry whose analysis is
+  /// otherwise kept — one from before notes existed, done once on the laptop
+  /// by Claude. Same conditions as [writeTitle]: the entry as stored now, its
+  /// transcript still the one with [basis], and only a gap is filled (notes
+  /// from a newer analysis that arrived meanwhile stay). The notes are the
+  /// analysis item's, so that item's clock moves; its source and model don't.
+  Future<bool> writeNotes(
+    String id,
+    String notes, {
+    required String model,
+    required String basis,
+  }) async {
+    final live = byId(id);
+    if (live == null || transcriptBasis(live.transcript) != basis) return false;
+    final trimmed = notes.trim();
+    if (trimmed.isEmpty || (live.notes ?? '').isNotEmpty) return true;
+    live
+      ..notes = trimmed
+      ..notesModel = model;
     await saveAnalysis(live, entryChanged: false);
     return true;
   }
@@ -714,6 +742,8 @@ class JournalRepository {
     incoming
       ..title = local.title
       ..summary = local.summary
+      ..notes = local.notes
+      ..notesModel = local.notesModel
       ..moodLabel = local.moodLabel
       ..moodScore = local.moodScore
       ..dimensions = local.dimensions

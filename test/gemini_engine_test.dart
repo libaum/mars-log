@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mars_log/data/analysis_engine.dart';
 import 'package:mars_log/data/gemini_engine.dart';
 import 'package:mars_log/domain/analysis_basis.dart';
+import 'package:mars_log/domain/journal_entry.dart';
 import 'package:mars_log/domain/people_aliases.dart';
 
 typedef _Request = ({String method, String path, Map<String, String> headers, List<int> body});
@@ -61,6 +62,7 @@ void _answer(HttpRequest req, Object body, {int status = 200}) {
 const _analysis = {
   'title': 'Tag am See',
   'summary': 'Ich war am See.',
+  'notes': '- am See\n- Wasser kalt, trotzdem rein',
   'moodLabel': 'Ruhig',
   'moodScore': 7.5,
   'dimensions': {'calm': 90},
@@ -167,6 +169,7 @@ void main() {
 
     final r = await _engine(fake).analyzeText('Heute am See.');
     expect(r.title, 'Tag am See');
+    expect(r.notes, '- am See\n- Wasser kalt, trotzdem rein');
     expect(r.moodScore, 7.5);
     expect(r.dimensions['stress'], 50, reason: 'missing dimensions default to neutral');
     expect(r.model, 'text-model');
@@ -180,6 +183,8 @@ void main() {
     final config = body['generationConfig'] as Map<String, dynamic>;
     expect(config['thinkingConfig'], {'thinkingLevel': 'low'});
     expect(config['responseSchema']['type'], 'OBJECT');
+    expect(config['responseSchema']['required'], contains('notes'));
+    expect(body['contents'][0]['parts'][0]['text'], contains(kNotesPromptRule));
     expect(jsonEncode(config['responseSchema']), isNot(contains('people')),
         reason: 'people are their own call');
   });

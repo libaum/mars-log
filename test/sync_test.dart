@@ -913,6 +913,46 @@ void main() {
       });
     });
 
+    test('notes filled in on the laptop reach the phone and keep the rest', () async {
+      await phone.run((j, _) async {
+        await j.upsert(entry('a', transcript: 'alt')
+          ..summary = 'von Gemini'
+          ..analysisModel = 'gemini-3.7-flash');
+        await j.upsert(entry('b', transcript: 'neu')
+          ..summary = 'neu'
+          ..notes = '- vom Handy'
+          ..notesModel = 'gemini-3.8-flash');
+      });
+      await phone.sync(relay, key);
+      await laptop.sync(relay, key);
+      await tick();
+      await laptop.run((j, _) async {
+        expect(
+          await j.writeNotes('a', '- alles', model: 'claude', basis: transcriptBasis('alt')),
+          isTrue,
+        );
+        expect(
+          await j.writeNotes('a', '- x', model: 'claude', basis: transcriptBasis('anders')),
+          isFalse,
+          reason: 'notes of another transcript',
+        );
+        expect(
+          await j.writeNotes('b', '- vom Laptop', model: 'claude', basis: transcriptBasis('neu')),
+          isTrue,
+        );
+      });
+      await laptop.sync(relay, key);
+      await phone.sync(relay, key);
+      await phone.run((j, _) async {
+        final a = j.byId('a')!;
+        expect(a.notes, '- alles');
+        expect(a.notesModel, 'claude');
+        expect(a.summary, 'von Gemini');
+        expect(a.analysisModel, 'gemini-3.7-flash');
+        expect(j.byId('b')!.notes, '- vom Handy', reason: 'only a gap is filled');
+      });
+    });
+
     test('a Gemini analysis survives its entry being edited after the upgrade', () async {
       // On the phone since before the split: analysis inside, no own clock.
       await phone.run((j, _) async {

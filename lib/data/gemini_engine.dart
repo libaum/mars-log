@@ -79,6 +79,7 @@ Aufgaben:
    calm, stress, focus, social.
 6. tags: 3 bis 6 kurze Themen-Tags (deutsche Substantive, z. B. "Sport",
    "Arbeit", "Freunde").
+7. notes: $kNotesPromptRule
 
 Transkript:
 ''';
@@ -110,6 +111,7 @@ Zusammenfassungen:
     'properties': {
       'title': {'type': 'string'},
       'summary': {'type': 'string'},
+      'notes': {'type': 'string'},
       'moodLabel': {'type': 'string'},
       'moodScore': {'type': 'number'},
       'dimensions': {
@@ -124,7 +126,7 @@ Zusammenfassungen:
         'items': {'type': 'string'},
       },
     },
-    'required': ['title', 'summary', 'moodLabel', 'moodScore', 'dimensions', 'tags'],
+    'required': ['title', 'summary', 'notes', 'moodLabel', 'moodScore', 'dimensions', 'tags'],
   };
 
   static final Map<String, Object> peopleSchema = {
@@ -227,6 +229,7 @@ Zusammenfassungen:
       transcript: transcript,
       title: (json['title'] as String?)?.trim() ?? '',
       summary: (json['summary'] as String?)?.trim() ?? '',
+      notes: (json['notes'] as String?)?.trim() ?? '',
       moodLabel: (json['moodLabel'] as String?)?.trim() ?? '',
       moodScore: ((json['moodScore'] as num?)?.toDouble() ?? 5.0).clamp(0.0, 10.0),
       dimensions: {
@@ -332,6 +335,9 @@ $transcript''';
         'responseMimeType': 'application/json',
         'responseSchema': geminiSchema(schema),
         'temperature': 0.4,
+        // The notes of a long entry are a long answer; the default cap
+        // could cut them.
+        'maxOutputTokens': 65536,
         // Thinking tokens are billed as output. A summary, a mood and a few
         // tags don't need deep reasoning.
         'thinkingConfig': {'thinkingLevel': 'low'},

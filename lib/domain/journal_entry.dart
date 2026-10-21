@@ -60,6 +60,17 @@ class JournalEntry {
   /// Written by the analysis, or by hand ([titleByHand]).
   String? title;
   String? summary;
+
+  /// The entry in dense notes — far longer than [summary], far shorter than
+  /// the transcript: every event, person, number, plan and worry as said,
+  /// nothing smoothed over ([kNotesPromptRule]). Not shown in lists; it is
+  /// what evaluations over many entries read instead of the summary.
+  /// Written by the phone's analysis, or filled in once by Mars Hub (Claude)
+  /// for entries from before it existed. Never edited by hand.
+  String? notes;
+
+  /// The model that wrote [notes] — the analysis model, or Claude's.
+  String? notesModel;
   String? moodLabel;
   double? moodScore; // 0..10
   Map<String, int>? dimensions; // 0..100 per kMoodDimensions
@@ -155,6 +166,8 @@ class JournalEntry {
     this.transcript,
     this.title,
     this.summary,
+    this.notes,
+    this.notesModel,
     this.moodLabel,
     this.moodScore,
     this.dimensions,
@@ -203,6 +216,8 @@ class JournalEntry {
         'transcriptionModel': transcriptionModel,
         'title': title,
         'summary': summary,
+        'notes': notes,
+        'notesModel': notesModel,
         'moodLabel': moodLabel,
         'moodScore': moodScore,
         'dimensions': dimensions,
@@ -250,6 +265,8 @@ class JournalEntry {
         'id': '$id$kAnalysisItemSuffix',
         if (!titleByHand) 'title': title,
         if (!summaryByHand) 'summary': summary,
+        'notes': notes,
+        'notesModel': notesModel,
         'moodLabel': moodLabel,
         'moodScore': moodScore,
         'dimensions': dimensions,
@@ -281,6 +298,8 @@ class JournalEntry {
     if (json.containsKey('people')) people = _people(json['people']);
     if (json.containsKey('peopleModel')) peopleModel = json['peopleModel'] as String?;
     if (json.containsKey('peopleVersion')) peopleVersion = json['peopleVersion'] as int?;
+    if (json.containsKey('notes')) notes = json['notes'] as String?;
+    if (json.containsKey('notesModel')) notesModel = json['notesModel'] as String?;
     moodLabel = json['moodLabel'] as String?;
     moodScore = (json['moodScore'] as num?)?.toDouble();
     dimensions = dims == null
@@ -315,6 +334,8 @@ class JournalEntry {
       transcriptionModel: json['transcriptionModel'] as String?,
       title: json['title'] as String?,
       summary: json['summary'] as String?,
+      notes: json['notes'] as String?,
+      notesModel: json['notesModel'] as String?,
       moodLabel: json['moodLabel'] as String?,
       moodScore: (json['moodScore'] as num?)?.toDouble(),
       dimensions: dims == null
@@ -373,6 +394,8 @@ const kAnalysisItemSuffix = ':analysis';
 const kAnalysisKeys = <String>{
   'title',
   'summary',
+  'notes',
+  'notesModel',
   'moodLabel',
   'moodScore',
   'dimensions',
@@ -394,6 +417,9 @@ class AnalysisResult {
   /// 2–5 words for what the day was. Empty from engines that don't make one.
   final String title;
   final String summary;
+
+  /// See [JournalEntry.notes]. Empty from engines that don't write them.
+  final String notes;
   final String moodLabel;
   final double moodScore;
   final Map<String, int> dimensions;
@@ -408,6 +434,7 @@ class AnalysisResult {
     required this.transcript,
     this.title = '',
     required this.summary,
+    this.notes = '',
     required this.moodLabel,
     required this.moodScore,
     required this.dimensions,
@@ -431,6 +458,19 @@ List<String> cleanPeople(Object? raw) {
         name,
   ];
 }
+
+/// What [JournalEntry.notes] are — the one rule for every model that writes
+/// them (the phone's analysis and Mars Hub's backfill by Claude).
+const kNotesPromptRule =
+    'Halte den Eintrag in dichten Stichpunkten fest, aus der Ich-Perspektive, '
+    'eine Zeile pro Punkt, jede mit "- " am Anfang. Möglichst vollständig: '
+    'alle Ereignisse, Menschen, Orte, Zahlen, Zeiten, Pläne, Sorgen, Gefühle, '
+    'Gründe und Widersprüche, so wie sie gesagt wurden — auch Nebensächliches '
+    'und halbe Gedanken. Nichts glätten, nichts vereinfachen, nichts deuten, '
+    'nichts dazuerfinden; wenn ich hin- und hergerissen bin oder etwas '
+    'einschränke, steht das so da. Weglassen nur Füllwörter, Versprecher und '
+    'Wiederholungen. Etwa ein Viertel so lang wie das Transkript, bei kurzen '
+    'Einträgen auch länger. Prägnante Formulierungen von mir als kurzes Zitat.';
 
 /// Who counts as a person — the rule of the people extraction.
 const kPeoplePromptRule =

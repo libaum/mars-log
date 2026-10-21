@@ -8,7 +8,8 @@ import 'package:mars_log/domain/people_aliases.dart';
 /// 3: people.
 /// 4: Gemini transcribes the audio; people are their own call
 ///    ([AnalysisEngine.extractPeople], versioned by kPeopleVersion).
-const kAnalysisVersion = 4;
+/// 5: notes (JournalEntry.notes) next to the summary.
+const kAnalysisVersion = 5;
 
 /// Turns audio into a transcript and a transcript into its interpretation.
 /// The three steps are separate calls, so each result is kept on its own:
@@ -29,7 +30,7 @@ abstract class AnalysisEngine {
   /// One transcript for all [audioFiles], in order.
   Future<String> transcribe(List<File> audioFiles);
 
-  /// Summary, mood, dimensions, tags and title. Gets the transcript and
+  /// Summary, notes, mood, dimensions, tags and title. Gets the transcript and
   /// nothing else — never the entry, so nothing the user rated about it
   /// can leak into the analysis.
   Future<AnalysisResult> analyzeText(String transcript);
