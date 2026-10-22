@@ -33,6 +33,7 @@ class LocalStorageService {
   static const _keySyncPurged = 'log_sync_purged';
   static const _keySyncLastSyncedAt = 'log_sync_last_synced_at';
   static const _keySyncLastSeenSeq = 'log_sync_last_seen_seq';
+  static const _keySyncFormat = 'log_sync_format';
   // Value keeps the old "hub" name: paired devices already store it
   // (docs/adr/0001-relay-rename-keeps-hub-id-on-the-wire.md at the Mars root).
   static const _keySyncLastSeenRelayId = 'log_sync_last_seen_hub_id';
@@ -206,6 +207,12 @@ class LocalStorageService {
       await _prefs.setInt(_keySyncLastSyncedAt, at.millisecondsSinceEpoch);
     }
   }
+
+  /// The sync format this device's journal has been migrated to — see
+  /// [JournalSyncRepository.syncFormat]. Unset: never migrated.
+  int getSyncFormat() => _prefs.getInt(_keySyncFormat) ?? 1;
+
+  Future<void> setSyncFormat(int format) => _prefs.setInt(_keySyncFormat, format);
 
   /// Relay sequence number up to which this device has pulled, and which relay
   /// instance that number belongs to. Independent of [getSyncLastSyncedAt],

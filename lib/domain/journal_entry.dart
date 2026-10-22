@@ -249,8 +249,8 @@ class JournalEntry {
 
   /// The entry sync item: everything but the analysis ([kAnalysisKeys]) —
   /// except a summary / tags edited by hand, which are the human's.
-  /// `v: 2` tells it apart from items written before the split, which carried
-  /// the analysis inside.
+  /// `v: 2` is the sync format ([JournalSyncRepository.syncFormat]); items
+  /// from before the split carried the analysis inside and had none.
   Map<String, dynamic> toEntryItemJson() {
     final json = toJson()..removeWhere((k, _) => kAnalysisKeys.contains(k));
     if (summaryByHand) json['summary'] = summary;

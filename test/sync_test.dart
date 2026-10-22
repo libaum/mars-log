@@ -177,6 +177,144 @@ void main() {
 
   tearDown(() => tmp.delete(recursive: true));
 
+  test('JournalSyncRepository meets the mars_sync repository contract', () async {
+    var n = 0;
+    final fixture = SyncContractFixture(
+      freshRepository: () async {
+        SharedPreferences.resetStatic();
+        SharedPreferences.setMockInitialValues({});
+        final storage = await LocalStorageService.getInstance();
+        final dir = await Directory('${tmp.path}/contract${n++}').create();
+        return JournalSyncRepository(
+          journal: await JournalRepository.getInstance(
+            purgeTrace: SyncPurgeTrace(storage),
+            directory: dir,
+          ),
+          storage: storage,
+          deviceId: 'phone',
+        );
+      },
+      item: (key, at, {variant = 0}) => SyncItem(
+        itemId: key,
+        moduleId: 'mars_log',
+        deviceId: 'laptop',
+        updatedAt: at,
+        payload: (entry(key, transcript: 'text $variant')..changedAt = at).toEntryItemJson(),
+      ),
+    );
+    expect(await checkSyncRepositoryContract(fixture), isEmpty);
+  });
+
+  group('sync format 2 migration', () {
+    // Last synced by a build from before the split (2026-09-26).
+    final c = DateTime.utc(2026, 9, 10, 8);
+
+    JournalEntry legacy(String id) => entry(id)
+      ..changedAt = c
+      ..summary = 'alte Analyse'
+      ..moodScore = 6;
+
+    /// What such a build stored: no analysis clock, no `v`.
+    Map<String, dynamic> legacyJson(JournalEntry e) =>
+        e.toJson()..remove('analysisChangedAt');
+
+    /// A phone that synced [entries] with a pre-split build: its index, its
+    /// old entry items on the relay, both watermarks.
+    Future<void> seedLegacyPhone(List<JournalEntry> entries) async {
+      await phone.dir.create(recursive: true);
+      await File('${phone.dir.path}/entries.json')
+          .writeAsString(jsonEncode([for (final e in entries) legacyJson(e)]));
+      for (final e in entries) {
+        final item = SyncItem(
+          itemId: e.id,
+          moduleId: 'mars_log',
+          deviceId: 'phone',
+          updatedAt: e.changedAt,
+          payload: const {},
+        );
+        relay.push('phone', [
+          item.copyWith(payload: {
+            'ciphertext': await key.encrypt(legacyJson(e), aad: item.aad),
+          }),
+        ]);
+      }
+      phone.prefs = {
+        'log_sync_last_synced_at': c.add(const Duration(days: 1)).millisecondsSinceEpoch,
+        'log_sync_last_seen_seq': entries.length,
+        'log_sync_last_seen_hub_id': 'relay',
+      };
+    }
+
+    Future<Map<String, dynamic>> onRelay(String id) {
+      final row = relay.row(id)!;
+      return key.decrypt(row.payload['ciphertext'] as String, aad: row.aad);
+    }
+
+    test('replaces the old entry items on the relay, the analysis keeps its stamp',
+        () async {
+      await seedLegacyPhone([legacy('a')]);
+      await phone.sync(relay, key);
+
+      expect((await onRelay('a'))['v'], 2);
+      expect(relay.row('a')!.updatedAtMs, c.millisecondsSinceEpoch + 1);
+      final created = entry('a').createdAt;
+      expect(relay.row('a$kAnalysisItemSuffix')!.updatedAtMs,
+          created.millisecondsSinceEpoch);
+
+      await laptop.sync(relay, key);
+      await laptop.run((journal, _) async {
+        final a = journal.byId('a')!;
+        expect(a.summary, 'alte Analyse');
+        expect(a.analysisChangedAt, created);
+      });
+    });
+
+    test('runs once', () async {
+      await seedLegacyPhone([legacy('a')]);
+      await phone.sync(relay, key);
+      await phone.sync(relay, key);
+      await phone.run((journal, _) async {
+        expect(journal.byId('a')!.changedAt.millisecondsSinceEpoch,
+            c.millisecondsSinceEpoch + 1);
+      });
+    });
+
+    test('an edit made elsewhere since still wins', () async {
+      await seedLegacyPhone([legacy('a')]);
+      final edited = legacy('a')
+        ..transcript = 'neu'
+        ..changedAt = c.add(const Duration(hours: 1));
+      final item = SyncItem(
+        itemId: 'a',
+        moduleId: 'mars_log',
+        deviceId: 'laptop',
+        updatedAt: edited.changedAt,
+        payload: const {},
+      );
+      relay.push('laptop', [
+        item.copyWith(payload: {
+          'ciphertext': await key.encrypt(edited.toEntryItemJson(), aad: item.aad),
+        }),
+      ]);
+
+      await phone.sync(relay, key);
+
+      await phone.run((journal, _) async {
+        expect(journal.byId('a')!.transcript, 'neu');
+      });
+      expect((await onRelay('a'))['transcript'], 'neu');
+    });
+
+    test('a device that never synced shifts no clocks', () async {
+      await phone.dir.create(recursive: true);
+      await File('${phone.dir.path}/entries.json')
+          .writeAsString(jsonEncode([legacyJson(legacy('a'))]));
+      await phone.sync(relay, key);
+      expect(relay.row('a')!.updatedAtMs, c.millisecondsSinceEpoch);
+      expect((await onRelay('a'))['v'], 2);
+    });
+  });
+
   group('change clock', () {
     test('entries written before sync existed fall back to createdAt', () {
       final json = entry('a').toJson()..remove('changedAt');
@@ -975,31 +1113,6 @@ void main() {
       });
       expect(relay.row('a$kAnalysisItemSuffix')!.updatedAtMs,
           entry('a').createdAt.millisecondsSinceEpoch);
-    });
-
-    test('an item from before the split brings its analysis along', () async {
-      final old = entry('a', transcript: 'alt')
-        ..summary = 'von Gemini'
-        ..moodScore = 6;
-      final item = SyncItem(
-        itemId: 'a',
-        moduleId: 'mars_log',
-        deviceId: 'old-phone',
-        updatedAt: old.changedAt,
-        payload: old.toJson(), // the old format: no 'v', analysis inside
-      );
-      relay.push('old-phone', [
-        item.copyWith(payload: {'ciphertext': await key.encrypt(item.payload, aad: item.aad)}),
-      ]);
-
-      await laptop.sync(relay, key);
-      await laptop.run((j, _) async {
-        final e = j.byId('a')!;
-        expect(e.summary, 'von Gemini');
-        expect(e.moodScore, 6);
-        expect(e.analysisChangedAt, old.changedAt);
-        expect(e.analysisSource, isNull, reason: 'unknown source — the laptop redoes it');
-      });
     });
 
     test('a purge removes both items, and the entry everywhere', () async {

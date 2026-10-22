@@ -26,6 +26,13 @@ import 'package:mars_sync/mars_sync.dart';
 class JournalSyncRepository implements SyncRepository {
   static const _moduleId = 'mars_log';
 
+  /// 2: the analysis is its own item (`<id>:analysis`) with its own clock,
+  /// entry items carry `v: 2`. Items written before (2026-09-26) carried the
+  /// analysis inside the entry, and the relay still holds one for every entry
+  /// not edited since. The first round of a build that knows this format
+  /// migrates the journal and pushes everything once, which replaces them.
+  static const syncFormat = 2;
+
   /// The relay refuses a payload over 256 KB — and with it the whole push.
   /// Encrypted and base64'd, this much plaintext stays under it.
   static const maxUsagePayloadChars = 170 * 1024;
@@ -51,6 +58,20 @@ class JournalSyncRepository implements SyncRepository {
 
   @override
   Future<List<SyncItem>> localChangesSince(DateTime? since) async {
+    if (_storage.getSyncFormat() < syncFormat) {
+      // Only a device that synced before can have left old items on the
+      // relay; a fresh one pushes everything in the current format anyway.
+      if (_storage.getSyncLastSyncedAt() != null ||
+          await pullWatermark() != null) {
+        await _journal.advanceClocksForFormatMigration();
+        // Push everything: the moved clocks are older than the watermark. If
+        // this round fails, the cleared watermark makes the next one do it.
+        await _storage.setSyncLastSyncedAt(null);
+        since = null;
+      }
+      await _storage.setSyncFormat(syncFormat);
+    }
+
     final items = <SyncItem>[];
 
     for (final entry in _journal.allEntries) {
@@ -78,20 +99,10 @@ class JournalSyncRepository implements SyncRepository {
       // The analysis is its own item with its own clock — see
       // JournalEntry.analysisChangedAt.
       final analyzed = entry.analysisChangedAt;
-      final DateTime? stamp;
-      if (analyzed != null) {
-        stamp = (since == null || !analyzed.isBefore(since)) ? analyzed : null;
-      } else if (entryDue && _hasAnalysis(entry)) {
-        // An analysis from before the split (Gemini) has no clock of its own
-        // and would never go out as its own item — while the entry item
-        // above replaces the old combined one on the relay, taking it along.
-        // So it rides with every push of its entry, stamped with the entry's
-        // creation: older than any analysis written since, so it never
-        // displaces one.
-        stamp = entry.createdAt;
-      } else {
-        stamp = null;
-      }
+      final stamp =
+          analyzed != null && (since == null || !analyzed.isBefore(since))
+              ? analyzed
+              : null;
       if (stamp != null) {
         items.add(
           SyncItem(
@@ -190,9 +201,6 @@ class JournalSyncRepository implements SyncRepository {
     return items;
   }
 
-  static bool _hasAnalysis(JournalEntry e) =>
-      (e.summary ?? '').isNotEmpty || e.moodScore != null || e.tags.isNotEmpty;
-
   @override
   Future<void> applyRemoteItems(List<SyncItem> items) async {
     final upserts = <JournalEntry>[];
@@ -262,15 +270,6 @@ class JournalSyncRepository implements SyncRepository {
       }
       entry.changedAt = item.updatedAt;
       upserts.add(entry);
-      // Written before the analysis became its own item: the analysis rides
-      // inside. Split it off, with the item's stamp as its clock.
-      if (!item.payload.containsKey('v')) {
-        analyses.add(SyncedAnalysis(entry.id, item.updatedAt, {
-          ...entry.toAnalysisItemJson(),
-          'analysisSource': null,
-          'analysisBasis': null,
-        }));
-      }
     }
     await _journal.applySynced(upserts, removed, analyses: analyses);
     if (insights.isNotEmpty) await _journal.applySyncedInsights(insights);

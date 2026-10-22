@@ -177,6 +177,16 @@ class JournalRepository {
         ..clear()
         ..addAll(list.map((e) =>
             JournalEntry.fromJson((e as Map).cast<String, dynamic>())));
+      // An analysis from before the split (2026-09-26) has no clock of its
+      // own. It gets the entry's creation — the stamp it has always synced
+      // with, so no device sees a different winner. Stored with the next write.
+      for (final e in _entries) {
+        final hasAnalysis =
+            (e.summary ?? '').isNotEmpty || e.moodScore != null || e.tags.isNotEmpty;
+        if (e.analysisChangedAt == null && hasAnalysis) {
+          e.analysisChangedAt = e.createdAt;
+        }
+      }
       _sort();
       return true;
     } catch (_) {
@@ -219,11 +229,19 @@ class JournalRepository {
     return _persistFile(_peoplePath, aliases.toJson());
   }
 
-  /// Aliases from a sync round, if newer than ours.
+  /// Aliases from a sync round, unless ours are newer or the same.
   Future<void> applySyncedAliases(PeopleAliases incoming) async {
     final local = _aliases.changedAt;
     final remote = incoming.changedAt;
-    if (remote == null || (local != null && !remote.isAfter(local))) return;
+    if (remote == null) return;
+    if (local != null && !remote.isAfter(local)) {
+      // An equal stamp with other content was chosen by the engine (device
+      // id tie-break); only our own echo is skipped.
+      if (remote.isBefore(local) ||
+          jsonEncode(incoming.toJson()) == jsonEncode(_aliases.toJson())) {
+        return;
+      }
+    }
     await writeAliases(incoming);
   }
 
@@ -243,7 +261,14 @@ class JournalRepository {
     var changed = false;
     for (final i in incoming) {
       final local = _insights[i.id];
-      if (local != null && !i.createdAt.isAfter(local.createdAt)) continue;
+      if (local != null && i.createdAt.isBefore(local.createdAt)) continue;
+      // Same stamp: our own echo is skipped, other content (the engine chose
+      // it by device id) is taken.
+      if (local != null &&
+          i.createdAt.isAtSameMomentAs(local.createdAt) &&
+          jsonEncode(i.toJson()) == jsonEncode(local.toJson())) {
+        continue;
+      }
       _insights[i.id] = i;
       changed = true;
     }
@@ -316,6 +341,17 @@ class JournalRepository {
     });
     _writes = done.catchError((_) {});
     return done.then((_) => revision.value++);
+  }
+
+  /// One-time move of this device's entry items on the relay onto the split
+  /// format ([JournalSyncRepository.syncFormat]): every entry's clock moves
+  /// 1 ms forward, just enough to replace its old item on the relay and never
+  /// enough to beat a real edit made anywhere since.
+  Future<void> advanceClocksForFormatMigration() async {
+    for (final e in _entries) {
+      e.changedAt = e.changedAt.add(const Duration(milliseconds: 1));
+    }
+    await _persist();
   }
 
   /// Stores [entry] as the new truth for its id. It must be the stored
@@ -731,10 +767,6 @@ class JournalRepository {
   /// An incoming entry item carries no analysis ([JournalEntry.toEntryItemJson])
   /// — that is its own item with its own clock. Keep the analysis this device
   /// holds; a summary / tags edited by hand come with the entry and win.
-  ///
-  /// An item from before the split does carry an analysis; it is kept here
-  /// too, and [applySynced] then applies the one [JournalSyncRepository]
-  /// split off it by the analysis clock like any other.
   void _keepAnalysis(JournalEntry local, JournalEntry incoming) {
     final title = incoming.title;
     final summary = incoming.summary;
