@@ -23,6 +23,8 @@ const _allowed = [
   'package:path_provider/',
   'package:shared_preferences/',
   'package:mars_sync/',
+  // SyncService and its status only — not the key store or the screen.
+  'package:mars_sync_flutter/mars_sync_flutter.dart',
   'package:crypto/', // pure Dart (transcriptBasis)
   'package:mars_log/domain/',
   'package:mars_log/data/journal_repository.dart',
@@ -30,12 +32,6 @@ const _allowed = [
   'package:mars_log/data/usage_repository.dart',
   'package:mars_log/sync/',
 ];
-
-/// The phone's key store. It has a Linux build, but Mars Hub never constructs
-/// it — it passes mars_sync's FileSyncKeyStore instead.
-const _exceptions = {
-  'lib/sync/secure_sync_key_store.dart': ['package:flutter_secure_storage/'],
-};
 
 void main() {
   test('code shared with Mars Hub imports nothing phone-only', () {
@@ -49,12 +45,11 @@ void main() {
           : [File(root)];
       for (final file in files) {
         final path = file.path;
-        final extra = _exceptions[path] ?? const <String>[];
         final imports = RegExp(r'''^(?:import|export)\s+['"]([^'"]+)['"]''', multiLine: true)
             .allMatches(file.readAsStringSync())
             .map((m) => m.group(1)!);
         for (final uri in imports) {
-          final ok = [..._allowed, ...extra].any(uri.startsWith);
+          final ok = _allowed.any(uri.startsWith);
           if (!ok) violations.add('$path → $uri');
         }
       }

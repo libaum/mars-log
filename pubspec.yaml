@@ -39,6 +39,9 @@ dependencies:
   # published — see ../SYNC.md.
   mars_sync:
     path: ../mars_sync
+  # SyncService, key store and pairing screen, shared by every synced app.
+  mars_sync_flutter:
+    path: ../mars_sync_flutter
   # Android's UsageStatsManager, for the phone usage record.
   usage_access:
     path: packages/usage_access

@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:get_it/get_it.dart';
 import 'package:mars_log/data/analysis_engine.dart';
 import 'package:mars_log/data/export_service.dart';
@@ -22,8 +23,11 @@ import 'package:mars_log/logic/recording_manager.dart';
 import 'package:mars_log/logic/settings_manager.dart';
 import 'package:mars_log/logic/usage_tracking_manager.dart';
 import 'package:mars_log/sync/sync_purge_trace.dart';
-import 'package:mars_log/sync/sync_service.dart';
+import 'package:mars_log/sync/journal_sync_repository.dart';
+import 'package:mars_log/sync/pairing.dart';
 import 'package:mars_log/theme/theme_manager.dart';
+import 'package:mars_sync_flutter/mars_sync_flutter.dart';
+import 'package:mars_sync_flutter/secure_sync_key_store.dart';
 
 final getIt = GetIt.instance;
 
@@ -43,10 +47,21 @@ Future<void> setupServiceLocator() async {
   getIt.registerSingleton<UsageRepository>(usage);
 
   // Never throws; an unpaired or broken pairing just reports it in status.
+  final syncStorage = getIt<LocalStorageService>();
   final sync = SyncService(
-    storage: getIt<LocalStorageService>(),
-    journal: journal,
-    usage: usage,
+    prefs: LogPairingPrefs(syncStorage),
+    // Where the installed app's secrets are — changing the options loses them.
+    keys: SecureSyncKeyStore(const FlutterSecureStorage(
+      aOptions: AndroidOptions(encryptedSharedPreferences: true),
+    )),
+    // The phone-usage days sync along with the journal.
+    repository: (deviceId) => JournalSyncRepository(
+      journal: journal,
+      storage: syncStorage,
+      deviceId: deviceId,
+      usage: usage,
+    ),
+    strings: logSyncStrings,
   );
   await sync.init();
   getIt.registerSingleton<SyncService>(sync);

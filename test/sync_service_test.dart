@@ -1,10 +1,13 @@
-import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mars_log/data/journal_repository.dart';
+import 'package:mars_log/data/local_storage_service.dart';
+import 'package:mars_log/sync/journal_sync_repository.dart';
+import 'package:mars_log/sync/pairing.dart';
 import 'package:mars_log/sync/sync_purge_trace.dart';
-import 'package:mars_log/sync/sync_service.dart';
 import 'package:mars_sync/mars_sync.dart';
+import 'package:mars_sync_flutter/mars_sync_flutter.dart';
 
 import 'sync_test.dart' show FakeRelay, FakeTransport, Device, entry;
 
@@ -26,43 +29,25 @@ class _MemoryKeys implements SyncKeyStore {
   Future<void> writeEncryptionKey(String base64Key) async => _values['key'] = base64Key;
 }
 
-/// Holds the encryption-key write until [gate] opens, and the next token
-/// read until [tokenGate] opens.
-class _GatedKeys extends _MemoryKeys {
-  Completer<void>? gate;
-  Completer<void>? tokenGate;
-  @override
-  Future<String?> readDeviceToken() async {
-    final g = tokenGate;
-    tokenGate = null;
-    if (g != null) await g.future;
-    return super.readDeviceToken();
-  }
+/// mars_log's wiring of the shared SyncService: the real journal behind it,
+/// the paired mirror its 30-day purge reads. The service's own guarantees
+/// (key check, generation guard, overlapping rounds) are pinned in
+/// mars_sync_flutter's tests.
+SyncService _logSync(
+  JournalRepository journal,
+  LocalStorageService storage,
+  SyncKeyStore keys,
+  SyncTransport Function(Uri uri, String token) transport,
+) =>
+    SyncService(
+      prefs: LogPairingPrefs(storage),
+      keys: keys,
+      repository: (deviceId) =>
+          JournalSyncRepository(journal: journal, storage: storage, deviceId: deviceId),
+      strings: logSyncStrings,
+      transport: transport,
+    );
 
-  @override
-  Future<void> writeEncryptionKey(String base64Key) async {
-    final g = gate;
-    if (g != null) await g.future;
-    return super.writeEncryptionKey(base64Key);
-  }
-}
-
-/// Holds the first key-check pull until [gate] opens — the window in which
-/// the pairing can change under a running check.
-class _GatedTransport extends FakeTransport {
-  final Completer<void> gate;
-  _GatedTransport(super.relay, super.deviceId, this.gate);
-
-  @override
-  Future<PullResult> pull(String moduleId, {required int sinceSeq}) async {
-    if (moduleId == KeyCheck.moduleId) await gate.future;
-    return super.pull(moduleId, sinceSeq: sinceSeq);
-  }
-}
-
-/// In Mars Hub, mars_log's pairing is written by another module's screen and
-/// the log follows via reload(). These pin down that a follower can never
-/// push with a key it hasn't proven against the relay it now talks to.
 void main() {
   late Directory tmp;
   late Device phone;
@@ -87,14 +72,17 @@ void main() {
 
   FakeRelay relayFor(Uri uri) => uri.host == 'a' ? relayA : relayB;
 
+  // In Mars Hub, mars_log's pairing is written by another module's screen and
+  // the log follows via reload(): a follower never pushes with a key it
+  // hasn't proven against the relay it now talks to.
   test('reload() makes the next round prove the key against the new relay', () async {
     await phone.run((journal, storage) async {
       final keys = _MemoryKeys();
-      final sync = SyncService(
-        storage: storage,
-        journal: journal,
-        keys: keys,
-        transport: (uri, token) => FakeTransport(relayFor(uri), 'phone'),
+      final sync = _logSync(
+        journal,
+        storage,
+        keys,
+        (uri, token) => FakeTransport(relayFor(uri), 'phone'),
       );
       await sync.init();
       await sync.pairDevice(serverUrl: 'https://a', token: 't');
@@ -114,111 +102,14 @@ void main() {
     });
   });
 
-  test('a key check that outlives a re-pair does not count for the new relay', () async {
-    await phone.run((journal, storage) async {
-      final keys = _MemoryKeys();
-      final gate = Completer<void>();
-      final sync = SyncService(
-        storage: storage,
-        journal: journal,
-        keys: keys,
-        transport: (uri, token) => uri.host == 'a'
-            ? _GatedTransport(relayA, 'phone', gate)
-            : FakeTransport(relayB, 'phone'),
-      );
-      // Paired to A with key A, never verified in this process.
-      await storage.setSyncServerUrl('https://a');
-      await keys.writeDeviceToken('t');
-      await keys.writeDeviceId('phone');
-      await keys.writeEncryptionKey(keyA);
-      await sync.init();
-      await journal.upsert(entry('x'));
-
-      final round = sync.syncNow(); // key check against A, held at the gate
-      await Future<void>.delayed(const Duration(milliseconds: 20));
-      await storage.setSyncServerUrl('https://b');
-      await sync.reload();
-      gate.complete(); // A answers "ok" — about a relay no longer in use
-      await round;
-
-      await sync.syncNow();
-      expect(sync.statusNotifier.value.phase, SyncPhase.error);
-      expect(relayB.row('x'), isNull);
-    });
-  });
-
-  test('a key import that outlives a re-pair does not count for the new relay', () async {
-    // Review round 5, L1: the check passed against A, the re-pair to B landed
-    // while the key was being written, and B was then marked verified.
-    await phone.run((journal, storage) async {
-      final keys = _GatedKeys();
-      final sync = SyncService(
-        storage: storage,
-        journal: journal,
-        keys: keys,
-        transport: (uri, token) => FakeTransport(relayFor(uri), 'phone'),
-      );
-      await storage.setSyncServerUrl('https://a');
-      await keys.writeDeviceToken('t');
-      await keys.writeDeviceId('phone');
-      await sync.init();
-      await journal.upsert(entry('x'));
-
-      keys.gate = Completer<void>();
-      final import = sync.importEncryptionKey(keyA);
-      await Future<void>.delayed(const Duration(milliseconds: 20));
-      await storage.setSyncServerUrl('https://b');
-      await sync.reload();
-      keys.gate!.complete();
-      await import;
-
-      await sync.syncNow();
-      expect(relayB.row('x'), isNull, reason: 'pushed to relay B with a key B never saw');
-    });
-  });
-
-  test('a re-pair during the key import\'s engine rebuild wins, unverified',
-      () async {
-    await phone.run((journal, storage) async {
-      final keys = _GatedKeys();
-      final sync = SyncService(
-        storage: storage,
-        journal: journal,
-        keys: keys,
-        transport: (uri, token) => FakeTransport(relayFor(uri), 'phone'),
-      );
-      await storage.setSyncServerUrl('https://a');
-      await keys.writeDeviceToken('t');
-      await keys.writeDeviceId('phone');
-      await sync.init();
-      await journal.upsert(entry('x'));
-
-      // Checked against A and written; the rebuild then stalls on its token
-      // read while the pairing moves to B.
-      keys.tokenGate = Completer<void>();
-      final gate = keys.tokenGate!;
-      final import = sync.importEncryptionKey(keyA);
-      await Future<void>.delayed(const Duration(milliseconds: 20));
-      await storage.setSyncServerUrl('https://b');
-      await sync.reload();
-      gate.complete();
-      await import;
-
-      await sync.syncNow();
-      expect(sync.statusNotifier.value.phase, SyncPhase.error,
-          reason: 'the stale rebuild pointed the engine back at relay A');
-      expect(relayB.row('x'), isNull, reason: 'pushed to relay B with a key B never saw');
-    });
-  });
-
   group('the 30-day purge waits only while paired', () {
     test('a relay URL without a key does not defer it', () async {
       await phone.run((journal, storage) async {
-        final sync = SyncService(
-          storage: storage,
-          journal: journal,
-          keys: _MemoryKeys(),
-          transport: (uri, token) => FakeTransport(relayFor(uri), 'phone'),
+        final sync = _logSync(
+          journal,
+          storage,
+          _MemoryKeys(),
+          (uri, token) => FakeTransport(relayFor(uri), 'phone'),
         );
         await sync.init();
         await sync.pairDevice(serverUrl: 'https://a', token: 't');

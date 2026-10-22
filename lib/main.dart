@@ -10,7 +10,7 @@ import 'package:mars_log/pages/lock_screen.dart';
 import 'package:mars_log/pages/main_screen.dart';
 import 'package:mars_log/services/service_locator.dart';
 import 'package:mars_log/logic/usage_tracking_manager.dart';
-import 'package:mars_log/sync/sync_service.dart';
+import 'package:mars_sync_flutter/mars_sync_flutter.dart';
 import 'package:mars_log/theme/theme_manager.dart';
 
 void main() async {

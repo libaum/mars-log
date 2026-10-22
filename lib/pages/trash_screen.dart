@@ -5,7 +5,7 @@ import 'package:mars_log/logic/journal_manager.dart';
 import 'package:mars_log/pages/widgets/confirm_dialog.dart';
 import 'package:mars_log/pages/widgets/double_tap_theme_toggle.dart';
 import 'package:mars_log/services/service_locator.dart';
-import 'package:mars_log/sync/sync_service.dart';
+import 'package:mars_sync_flutter/mars_sync_flutter.dart';
 import 'package:mars_log/theme/theme_constants.dart';
 
 /// The trash: soft-deleted entries. Each can be restored or purged for good.

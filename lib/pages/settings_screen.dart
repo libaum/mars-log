@@ -14,14 +14,15 @@ import 'package:mars_log/logic/notification_manager.dart';
 import 'package:mars_log/logic/settings_manager.dart';
 import 'package:mars_log/logic/lock_manager.dart';
 import 'package:mars_log/pages/about_screen.dart';
-import 'package:mars_log/pages/sync_screen.dart';
 import 'package:mars_log/pages/trash_screen.dart';
 import 'package:mars_log/pages/widgets/confirm_dialog.dart';
 import 'package:mars_log/pages/widgets/double_tap_theme_toggle.dart';
 import 'package:mars_log/services/service_locator.dart';
-import 'package:mars_log/sync/sync_service.dart';
+import 'package:mars_log/sync/pairing.dart';
 import 'package:mars_log/theme/theme_constants.dart';
 import 'package:mars_log/theme/theme_manager.dart';
+import 'package:mars_sync_flutter/mars_sync_flutter.dart';
+import 'package:mars_sync_flutter/sync_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -508,7 +509,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     },
                     onTap: () => Navigator.push(
                       context,
-                      MaterialPageRoute(builder: (_) => const SyncScreen()),
+                      MaterialPageRoute(builder: (_) => SyncScreen(
+                        sync: getIt<SyncService>(),
+                        strings: logSyncStrings,
+                      )),
                     ),
                   ),
                 ),
