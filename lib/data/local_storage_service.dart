@@ -1,4 +1,3 @@
-
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// Thin wrapper around SharedPreferences for non-sensitive app settings.
