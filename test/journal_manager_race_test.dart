@@ -81,14 +81,10 @@ AnalysisResult _result({
       tags: tags,
     );
 
-JournalManager _manager(
-  JournalRepository journal,
-  LocalStorageService storage,
-  AnalysisEngine engine,
-) {
+Future<JournalManager> _manager(JournalRepository journal, AnalysisEngine engine) async {
   getIt
     ..registerSingleton<JournalRepository>(journal)
-    ..registerSingleton<LocalStorageService>(storage)
+    ..registerSingleton<LocalStorageService>(await LocalStorageService.getInstance())
     ..registerSingleton<LocationService>(_NoLocation())
     ..registerSingleton<AnalysisEngine>(engine)
     ..registerSingleton<AnalysisTaskService>(_Task());
@@ -132,9 +128,9 @@ void main() {
     await phone.sync(relay, key);
     await laptop.sync(relay, key);
 
-    await phone.run((journal, storage) async {
+    await phone.run((journal, ledger) async {
       final engine = _Engine((_) => _result());
-      final manager = _manager(journal, storage, engine);
+      final manager = await _manager(journal, engine);
       // The long way round (Whisper first) — the window in which the laptop
       // edits.
       final analysis = manager.reanalyze(journal.byId('a')!, retranscribe: true);
@@ -147,7 +143,7 @@ void main() {
         await lj.moveToTrash(lj.byId('a')!);
       });
       await laptop.sync(relay, key);
-      await syncLive('phone', journal, storage, relay, key);
+      await syncLive('phone', journal, ledger, relay, key);
 
       engine.gate.complete();
       await analysis;
@@ -172,11 +168,11 @@ void main() {
     await phone.sync(relay, key);
     await laptop.sync(relay, key);
 
-    await phone.run((journal, storage) async {
+    await phone.run((journal, ledger) async {
       final engine = _Engine((text) => text == null
           ? _result(transcript: 'zweiter Teil')
           : _result(transcript: text, summary: 'beides'));
-      final manager = _manager(journal, storage, engine);
+      final manager = await _manager(journal, engine);
       await phone.audio('b.wav').create(recursive: true);
       final append = manager.appendRecording(
         journal.byId('a')!,
@@ -187,7 +183,7 @@ void main() {
       await tick();
       await laptop.run((lj, _) => lj.setText(lj.byId('a')!, transcript: 'Tippfehler'));
       await laptop.sync(relay, key);
-      await syncLive('phone', journal, storage, relay, key);
+      await syncLive('phone', journal, ledger, relay, key);
 
       engine.gate.complete();
       await append;
@@ -205,9 +201,9 @@ void main() {
     await phone.sync(relay, key);
     await laptop.sync(relay, key);
 
-    await phone.run((journal, storage) async {
+    await phone.run((journal, ledger) async {
       final engine = _Engine((text) => _result(transcript: text ?? 'nur das Neue'));
-      final manager = _manager(journal, storage, engine);
+      final manager = await _manager(journal, engine);
       await phone.audio('b.wav').create(recursive: true);
       final append = manager.appendRecording(
         journal.byId('a')!,
@@ -222,7 +218,7 @@ void main() {
         await lj.purge(e);
       });
       await laptop.sync(relay, key);
-      await syncLive('phone', journal, storage, relay, key);
+      await syncLive('phone', journal, ledger, relay, key);
       expect(journal.byId('a'), isNull);
 
       engine.gate.complete();
@@ -241,9 +237,9 @@ void main() {
     await phone.sync(relay, key);
     await laptop.sync(relay, key);
 
-    await phone.run((journal, storage) async {
+    await phone.run((journal, ledger) async {
       final engine = _Engine((text) => _result(transcript: text ?? 'neu'));
-      final manager = _manager(journal, storage, engine);
+      final manager = await _manager(journal, engine);
       await phone.audio('b.wav').create(recursive: true);
       final append = manager.appendRecording(
         journal.byId('a')!,
@@ -254,7 +250,7 @@ void main() {
       await tick();
       await laptop.run((lj, _) => lj.moveToTrash(lj.byId('a')!));
       await laptop.sync(relay, key);
-      await syncLive('phone', journal, storage, relay, key);
+      await syncLive('phone', journal, ledger, relay, key);
 
       engine.gate.complete();
       await append;
@@ -266,7 +262,7 @@ void main() {
   });
 
   test('a failed analysis keeps the transcript, and the retry reuses it', () async {
-    await phone.run((journal, storage) async {
+    await phone.run((journal, ledger) async {
       await phone.audio('a.wav').create(recursive: true);
       await journal.upsert(entry('a', transcript: '', audio: ['a.wav']));
       var nanoFails = true;
@@ -280,7 +276,7 @@ void main() {
         return _result(transcript: text, summary: 'später');
       });
       engine.gate.complete();
-      final manager = _manager(journal, storage, engine);
+      final manager = await _manager(journal, engine);
 
       await manager.reanalyze(journal.byId('a')!);
       expect(journal.byId('a')!.status, EntryStatus.failed);
@@ -295,7 +291,7 @@ void main() {
   });
 
   test('"Neu analysieren" works from the transcript, without Whisper', () async {
-    await phone.run((journal, storage) async {
+    await phone.run((journal, ledger) async {
       await phone.audio('a.wav').create(recursive: true);
       await journal.upsert(entry('a', transcript: 'schon da', audio: ['a.wav']));
       var transcriptions = 0;
@@ -303,7 +299,7 @@ void main() {
         if (text == null) transcriptions++;
         return _result(transcript: text ?? 'neu gehört', summary: 'Analyse');
       })..gate.complete();
-      final manager = _manager(journal, storage, engine);
+      final manager = await _manager(journal, engine);
 
       await manager.reanalyze(journal.byId('a')!);
       expect(transcriptions, 0);
@@ -319,11 +315,11 @@ void main() {
 
   test('the phase moves from transcribing to analysing, transcript already stored',
       () async {
-    await phone.run((journal, storage) async {
+    await phone.run((journal, ledger) async {
       await phone.audio('a.wav').create(recursive: true);
       await journal.upsert(entry('a', transcript: '', audio: ['a.wav']));
       final engine = _Engine((text) => _result(transcript: text ?? 'gehört'));
-      final manager = _manager(journal, storage, engine);
+      final manager = await _manager(journal, engine);
       final seen = <AnalysisPhase?>[];
       String? transcriptWhenAnalysing;
       manager.phases.addListener(() {
@@ -398,7 +394,7 @@ void main() {
   group('pending', () {
     test('no connection: the entry waits, then finishes without transcribing twice',
         () async {
-      await phone.run((journal, storage) async {
+      await phone.run((journal, ledger) async {
         var offline = true;
         var transcriptions = 0;
         var analysisCalls = 0;
@@ -411,7 +407,7 @@ void main() {
           if (offline) throw AnalysisException('Wartet auf Netz.', transient: true, offline: true);
           return _result(transcript: text, summary: 'später');
         })..gate.complete();
-        final manager = _manager(journal, storage, engine);
+        final manager = await _manager(journal, engine);
         await phone.audio('1.m4a').create(recursive: true);
 
         await manager.createFromAudio(
@@ -440,7 +436,7 @@ void main() {
     });
 
     test('a recording appended offline is kept until transcribed', () async {
-      await phone.run((journal, storage) async {
+      await phone.run((journal, ledger) async {
         await phone.audio('a.m4a').create(recursive: true);
         await journal.upsert(entry('a', transcript: 'erster Teil', audio: ['a.m4a']));
         var offline = true;
@@ -451,7 +447,7 @@ void main() {
           }
           return _result(transcript: text);
         })..gate.complete();
-        final manager = _manager(journal, storage, engine);
+        final manager = await _manager(journal, engine);
         await phone.audio('b.m4a').create(recursive: true);
 
         await manager.appendRecording(
@@ -472,10 +468,10 @@ void main() {
     });
 
     test('a rejected key fails instead of waiting', () async {
-      await phone.run((journal, storage) async {
+      await phone.run((journal, ledger) async {
         await journal.upsert(entry('a', transcript: 'text'));
         final engine = _Engine((_) => throw AnalysisException('Key prüfen'))..gate.complete();
-        final manager = _manager(journal, storage, engine);
+        final manager = await _manager(journal, engine);
         await manager.reanalyze(journal.byId('a')!);
         expect(journal.byId('a')!.status, EntryStatus.failed);
       });
@@ -491,11 +487,11 @@ void main() {
 
   group('people', () {
     test('every new entry gets its people from their own call', () async {
-      await phone.run((journal, storage) async {
+      await phone.run((journal, ledger) async {
         final engine = _Engine((text) => _result(transcript: text ?? 'Mit Lena.'))
           ..people = ((_, _) => const [PersonMention(person: 'Lena', mention: 'Lena', isNew: true)])
           ..gate.complete();
-        final manager = _manager(journal, storage, engine);
+        final manager = await _manager(journal, engine);
         await phone.audio('1.m4a').create(recursive: true);
         await manager.createFromAudio(
           RecordingResult(id: '1', fileName: '1.m4a', createdAt: DateTime.now()),
@@ -509,7 +505,7 @@ void main() {
 
     test('a known person under another name: the aliases learn it, the entry keeps the mention',
         () async {
-      await phone.run((journal, storage) async {
+      await phone.run((journal, ledger) async {
         await journal.upsert(entry('old', transcript: '')..people = ['Vincent']);
         await journal.upsert(entry('a', transcript: 'Mit meinem Bruder.'));
         late List<KnownPerson> seen;
@@ -519,7 +515,7 @@ void main() {
             return const [PersonMention(person: 'Vincent', mention: 'Bruder', isNew: false)];
           }
           ..gate.complete();
-        final manager = _manager(journal, storage, engine);
+        final manager = await _manager(journal, engine);
         await manager.backfillPeople(all: true);
 
         expect(seen.map((k) => k.name), contains('Vincent'));
@@ -531,7 +527,7 @@ void main() {
 
     test('backfill: removed by hand stays removed, added by hand stays, no duplicates',
         () async {
-      await phone.run((journal, storage) async {
+      await phone.run((journal, ledger) async {
         await journal.upsert(entry('a', transcript: 'Mit Lena und Tom.')
           ..people = ['Lena', 'Tom']
           ..peopleRemoved = ['Tom']
@@ -542,7 +538,7 @@ void main() {
                 PersonMention(person: 'Tom', mention: 'Tom', isNew: true),
               ])
           ..gate.complete();
-        final manager = _manager(journal, storage, engine);
+        final manager = await _manager(journal, engine);
 
         expect(manager.peopleBackfillDue, 1);
         final first = await manager.backfillPeople();
@@ -563,7 +559,7 @@ void main() {
     });
 
     test('a removal survives a re-extraction that spells the person differently', () async {
-      await phone.run((journal, storage) async {
+      await phone.run((journal, ledger) async {
         final aliases = const PeopleAliases().merge('Vince', 'Vincent');
         await journal.writeAliases(aliases);
         await journal.upsert(entry('a', transcript: 'Mit Vincent.')
@@ -572,14 +568,14 @@ void main() {
         final engine = _Engine((t) => _result(transcript: t ?? ''))
           ..people = ((_, _) => const [PersonMention(person: 'Vincent', mention: 'Vince', isNew: false)])
           ..gate.complete();
-        await _manager(journal, storage, engine).backfillPeople(all: true);
+        await (await _manager(journal, engine)).backfillPeople(all: true);
         expect(effectivePeople(journal.byId('a')!, journal.aliases), isEmpty);
       });
     });
   });
 
   test('people by hand: remove with undo, add, and an extraction keeps both', () async {
-    await phone.run((journal, storage) async {
+    await phone.run((journal, ledger) async {
       await journal.upsert(entry('a', transcript: 'Mit Lena und Tom.')..people = ['Lena', 'Tom']);
       final engine = _Engine((t) => _result(transcript: t ?? ''))
         ..people = ((_, _) => const [
@@ -587,7 +583,7 @@ void main() {
               PersonMention(person: 'Tom', mention: 'Tom', isNew: true),
             ])
         ..gate.complete();
-      final manager = _manager(journal, storage, engine);
+      final manager = await _manager(journal, engine);
       List<String> shown() => effectivePeople(journal.byId('a')!, journal.aliases);
 
       final before = await manager.removePerson('a', 'Tom');
@@ -615,9 +611,9 @@ void main() {
 
   group('self-rating', () {
     test('before: given to the new entry; after: set on it; skipped: null', () async {
-      await phone.run((journal, storage) async {
+      await phone.run((journal, ledger) async {
         final engine = _Engine((t) => _result(transcript: t ?? 'gehört'))..gate.complete();
-        final manager = _manager(journal, storage, engine);
+        final manager = await _manager(journal, engine);
         await phone.audio('1.m4a').create(recursive: true);
         await phone.audio('2.m4a').create(recursive: true);
         await phone.audio('3.m4a').create(recursive: true);
@@ -687,14 +683,14 @@ void main() {
         await req.response.close();
       });
 
-      await phone.run((journal, storage) async {
+      await phone.run((journal, ledger) async {
         final engine = GeminiEngine(
           apiKey: () async => 'k',
           transcriptionModelId: () => 'm',
           analysisModelId: () => 'm',
           base: Uri.parse('http://127.0.0.1:${server.port}/'),
         );
-        final manager = _manager(journal, storage, engine);
+        final manager = await _manager(journal, engine);
         await phone.audio('1.m4a').writeAsBytes([1, 2, 3]);
         manager.ratingForNextRecording = (valence: 7, arousal: 3);
         await manager.createFromAudio(

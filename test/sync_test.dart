@@ -4,16 +4,16 @@ import 'dart:math';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mars_log/data/journal_repository.dart';
-import 'package:mars_log/data/local_storage_service.dart';
 import 'package:mars_log/data/usage_repository.dart';
 import 'package:mars_log/domain/analysis_basis.dart';
 import 'package:mars_log/domain/insight.dart';
 import 'package:mars_log/domain/journal_entry.dart';
 import 'package:mars_log/domain/people_aliases.dart';
 import 'package:mars_log/domain/usage_day.dart';
-import 'package:mars_log/sync/journal_sync_repository.dart';
-import 'package:mars_log/sync/sync_purge_trace.dart';
+import 'package:mars_log/sync/journal_sync_items.dart';
+import 'package:mars_log/sync/pairing.dart';
 import 'package:mars_sync/mars_sync.dart';
+import 'package:mars_sync_flutter/mars_sync_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// Relay with the real relay's write rule (server-side LWW, one seq counter
@@ -84,17 +84,17 @@ class Device {
   Device(this.id, this.dir, {this.autoPurge = true});
 
   Future<T> run<T>(
-    Future<T> Function(JournalRepository journal, LocalStorageService storage) body,
+    Future<T> Function(JournalRepository journal, SyncLedger ledger) body,
   ) async {
     SharedPreferences.resetStatic();
     SharedPreferences.setMockInitialValues(prefs);
-    final storage = await LocalStorageService.getInstance();
+    final ledger = logLedger(await SharedPreferences.getInstance());
     final journal = await JournalRepository.getInstance(
-      purgeTrace: SyncPurgeTrace(storage),
+      purgeTrace: SyncPurgeTrace(ledger),
       directory: dir,
       autoPurge: autoPurge,
     );
-    final result = await body(journal, storage);
+    final result = await body(journal, ledger);
     final raw = await SharedPreferences.getInstance();
     prefs = {for (final k in raw.getKeys()) k: raw.get(k)!};
     return result;
@@ -104,12 +104,14 @@ class Device {
   Future<UsageRepository> usage() => UsageRepository.open(directory: dir);
 
   Future<SyncResult> sync(FakeRelay relay, SyncEncryptor key, {bool withUsage = false}) => run(
-        (journal, storage) async => MarsSyncEngine(
-          repository: JournalSyncRepository(
-            journal: journal,
-            storage: storage,
-            deviceId: id,
-            usage: withUsage ? await usage() : null,
+        (journal, ledger) async => MarsSyncEngine(
+          repository: ledger.repository(
+            JournalSyncItems(
+              journal: journal,
+              deviceId: id,
+              usage: withUsage ? await usage() : null,
+            ),
+            id,
           ),
           client: FakeTransport(relay, id),
           encryptor: key,
@@ -147,13 +149,12 @@ Future<void> tick() => Future<void>.delayed(const Duration(milliseconds: 5));
 Future<SyncResult> syncLive(
   String id,
   JournalRepository journal,
-  LocalStorageService storage,
+  SyncLedger ledger,
   FakeRelay relay,
   SyncEncryptor key,
 ) =>
     MarsSyncEngine(
-      repository:
-          JournalSyncRepository(journal: journal, storage: storage, deviceId: id),
+      repository: ledger.repository(JournalSyncItems(journal: journal, deviceId: id), id),
       client: FakeTransport(relay, id),
       encryptor: key,
     ).syncNow();
@@ -177,21 +178,23 @@ void main() {
 
   tearDown(() => tmp.delete(recursive: true));
 
-  test('JournalSyncRepository meets the mars_sync repository contract', () async {
+  test('JournalSyncItems on the ledger meet the mars_sync repository contract', () async {
     var n = 0;
     final fixture = SyncContractFixture(
       freshRepository: () async {
         SharedPreferences.resetStatic();
         SharedPreferences.setMockInitialValues({});
-        final storage = await LocalStorageService.getInstance();
+        final ledger = logLedger(await SharedPreferences.getInstance());
         final dir = await Directory('${tmp.path}/contract${n++}').create();
-        return JournalSyncRepository(
-          journal: await JournalRepository.getInstance(
-            purgeTrace: SyncPurgeTrace(storage),
-            directory: dir,
+        return ledger.repository(
+          JournalSyncItems(
+            journal: await JournalRepository.getInstance(
+              purgeTrace: SyncPurgeTrace(ledger),
+              directory: dir,
+            ),
+            deviceId: 'phone',
           ),
-          storage: storage,
-          deviceId: 'phone',
+          'phone',
         );
       },
       item: (key, at, {variant = 0}) => SyncItem(
@@ -205,8 +208,8 @@ void main() {
     expect(await checkSyncRepositoryContract(fixture), isEmpty);
   });
 
-  group('sync format 2 migration', () {
-    // Last synced by a build from before the split (2026-09-26).
+  group('entries from before the analysis split', () {
+    // Written by a build from before the split (2026-09-26).
     final c = DateTime.utc(2026, 9, 10, 8);
 
     JournalEntry legacy(String id) => entry(id)
@@ -250,64 +253,8 @@ void main() {
       return key.decrypt(row.payload['ciphertext'] as String, aad: row.aad);
     }
 
-    test('replaces the old entry items on the relay, the analysis keeps its stamp',
-        () async {
-      await seedLegacyPhone([legacy('a')]);
-      await phone.sync(relay, key);
-
-      expect((await onRelay('a'))['v'], 2);
-      expect(relay.row('a')!.updatedAtMs, c.millisecondsSinceEpoch + 1);
-      final created = entry('a').createdAt;
-      expect(relay.row('a$kAnalysisItemSuffix')!.updatedAtMs,
-          created.millisecondsSinceEpoch);
-
-      await laptop.sync(relay, key);
-      await laptop.run((journal, _) async {
-        final a = journal.byId('a')!;
-        expect(a.summary, 'alte Analyse');
-        expect(a.analysisChangedAt, created);
-      });
-    });
-
-    test('runs once', () async {
-      await seedLegacyPhone([legacy('a')]);
-      await phone.sync(relay, key);
-      await phone.sync(relay, key);
-      await phone.run((journal, _) async {
-        expect(journal.byId('a')!.changedAt.millisecondsSinceEpoch,
-            c.millisecondsSinceEpoch + 1);
-      });
-    });
-
-    test('an edit made elsewhere since still wins', () async {
-      await seedLegacyPhone([legacy('a')]);
-      final edited = legacy('a')
-        ..transcript = 'neu'
-        ..changedAt = c.add(const Duration(hours: 1));
-      final item = SyncItem(
-        itemId: 'a',
-        moduleId: 'mars_log',
-        deviceId: 'laptop',
-        updatedAt: edited.changedAt,
-        payload: const {},
-      );
-      relay.push('laptop', [
-        item.copyWith(payload: {
-          'ciphertext': await key.encrypt(edited.toEntryItemJson(), aad: item.aad),
-        }),
-      ]);
-
-      await phone.sync(relay, key);
-
-      await phone.run((journal, _) async {
-        expect(journal.byId('a')!.transcript, 'neu');
-      });
-      expect((await onRelay('a'))['transcript'], 'neu');
-    });
-
     test('an entry imported from an old export sends its analysis too', () async {
       await seedLegacyPhone([]);
-      phone.prefs['log_sync_format'] = 2; // migrated already, like every device now
       await phone.run((journal, _) => journal.mergeAll([legacy('z')]));
       await phone.sync(relay, key);
 
@@ -320,7 +267,7 @@ void main() {
       });
     });
 
-    test('a device that never synced shifts no clocks', () async {
+    test('an entry stored before the split goes out in the current format, at its own stamp', () async {
       await phone.dir.create(recursive: true);
       await File('${phone.dir.path}/entries.json')
           .writeAsString(jsonEncode([legacyJson(legacy('a'))]));
@@ -397,10 +344,10 @@ void main() {
       // so the local, finer stamp is *after* it and it is skipped as older.
       await phone.run((journal, _) => journal.upsert(entry('a')));
       await phone.sync(relay, key);
-      await phone.run((journal, storage) async {
-        await storage.setSyncPullWatermark(seq: null, relayId: null);
+      await phone.run((journal, ledger) async {
+        await ledger.clearPullWatermark();
         final before = journal.revision.value;
-        await syncLive('phone', journal, storage, relay, key);
+        await syncLive('phone', journal, ledger, relay, key);
         expect(journal.revision.value, before);
       });
     });
@@ -413,10 +360,10 @@ void main() {
       await phone.run((journal, _) => journal.upsert(entry('a')));
       await phone.sync(relay, key);
       await laptop.sync(relay, key);
-      await laptop.run((journal, storage) async {
-        await storage.setSyncPullWatermark(seq: null, relayId: null);
+      await laptop.run((journal, ledger) async {
+        await ledger.clearPullWatermark();
         final before = journal.revision.value;
-        await syncLive('laptop', journal, storage, relay, key);
+        await syncLive('laptop', journal, ledger, relay, key);
         expect(journal.revision.value, before);
       });
     });
@@ -424,12 +371,12 @@ void main() {
 
   group('purge trace', () {
     test('emptying the trash is remembered for the next push', () async {
-      await phone.run((journal, storage) async {
+      await phone.run((journal, ledger) async {
         final e = entry('a');
         await journal.upsert(e);
         await journal.moveToTrash(e);
         await journal.emptyTrash();
-        expect(storage.getSyncPurged().keys, ['a']);
+        expect(ledger.purged.keys, ['a']);
       });
     });
 
@@ -444,9 +391,9 @@ void main() {
       await File('${phone.dir.path}/entries.json')
           .writeAsString(jsonEncode([expired.toJson()]));
 
-      await phone.run((journal, storage) async {
+      await phone.run((journal, ledger) async {
         expect(journal.byId('old'), isNull);
-        expect(storage.getSyncPurged().keys, ['old']);
+        expect(ledger.purged.keys, ['old']);
       });
     });
   });

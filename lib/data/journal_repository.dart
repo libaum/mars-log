@@ -341,17 +341,6 @@ class JournalRepository {
     return done.then((_) => revision.value++);
   }
 
-  /// One-time move of this device's entry items on the relay onto the split
-  /// format ([JournalSyncRepository.syncFormat]): every entry's clock moves
-  /// 1 ms forward, just enough to replace its old item on the relay and never
-  /// enough to beat a real edit made anywhere since.
-  Future<void> advanceClocksForFormatMigration() async {
-    for (final e in _entries) {
-      e.changedAt = e.changedAt.add(const Duration(milliseconds: 1));
-    }
-    await _persist();
-  }
-
   /// Stores [entry] as the new truth for its id. It must be the stored
   /// object itself (or a new id): passing a copy held from before a sync
   /// round would silently undo that round — the edit methods below resolve

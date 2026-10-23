@@ -2,10 +2,8 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mars_log/data/journal_repository.dart';
-import 'package:mars_log/data/local_storage_service.dart';
-import 'package:mars_log/sync/journal_sync_repository.dart';
+import 'package:mars_log/sync/journal_sync_items.dart';
 import 'package:mars_log/sync/pairing.dart';
-import 'package:mars_log/sync/sync_purge_trace.dart';
 import 'package:mars_sync/mars_sync.dart';
 import 'package:mars_sync_flutter/mars_sync_flutter.dart';
 
@@ -35,15 +33,14 @@ class _MemoryKeys implements SyncKeyStore {
 /// mars_sync_flutter's tests.
 SyncService _logSync(
   JournalRepository journal,
-  LocalStorageService storage,
+  SyncLedger ledger,
   SyncKeyStore keys,
   SyncTransport Function(Uri uri, String token) transport,
 ) =>
-    SyncService(
-      prefs: LogPairingPrefs(storage),
+    SyncService.module(
+      ledger: ledger,
       keys: keys,
-      repository: (deviceId) =>
-          JournalSyncRepository(journal: journal, storage: storage, deviceId: deviceId),
+      items: (deviceId) => JournalSyncItems(journal: journal, deviceId: deviceId),
       strings: logSyncStrings,
       transport: transport,
     );
@@ -76,11 +73,11 @@ void main() {
   // the log follows via reload(): a follower never pushes with a key it
   // hasn't proven against the relay it now talks to.
   test('reload() makes the next round prove the key against the new relay', () async {
-    await phone.run((journal, storage) async {
+    await phone.run((journal, ledger) async {
       final keys = _MemoryKeys();
       final sync = _logSync(
         journal,
-        storage,
+        ledger,
         keys,
         (uri, token) => FakeTransport(relayFor(uri), 'phone'),
       );
@@ -93,7 +90,7 @@ void main() {
       expect(relayA.row('x'), isNotNull);
 
       // Another module re-pairs the shared state to relay B; key A stays.
-      await storage.setSyncServerUrl('https://b');
+      await ledger.setServerUrl('https://b');
       await sync.reload();
       await sync.syncNow();
 
@@ -104,32 +101,31 @@ void main() {
 
   group('the 30-day purge waits only while paired', () {
     test('a relay URL without a key does not defer it', () async {
-      await phone.run((journal, storage) async {
+      await phone.run((journal, ledger) async {
         final sync = _logSync(
           journal,
-          storage,
+          ledger,
           _MemoryKeys(),
           (uri, token) => FakeTransport(relayFor(uri), 'phone'),
         );
         await sync.init();
         await sync.pairDevice(serverUrl: 'https://a', token: 't');
         expect(sync.statusNotifier.value.isPaired, isFalse);
-        expect(SyncPurgeTrace(storage).defersAutoPurge, isFalse);
+        expect(SyncPurgeTrace(ledger).defersAutoPurge, isFalse);
 
         await sync.importEncryptionKey(keyA);
         expect(sync.statusNotifier.value.isPaired, isTrue);
-        expect(SyncPurgeTrace(storage).defersAutoPurge, isTrue);
+        expect(SyncPurgeTrace(ledger).defersAutoPurge, isTrue);
 
         await sync.unpair();
-        expect(SyncPurgeTrace(storage).defersAutoPurge, isFalse);
+        expect(SyncPurgeTrace(ledger).defersAutoPurge, isFalse);
       });
     });
 
     test('before the first rebuild after the update, a stored URL still defers', () async {
-      await phone.run((journal, storage) async {
-        await storage.setSyncServerUrl('https://a');
-        expect(storage.getSyncPaired(), isNull);
-        expect(SyncPurgeTrace(storage).defersAutoPurge, isTrue);
+      await phone.run((journal, ledger) async {
+        await ledger.setServerUrl('https://a');
+        expect(SyncPurgeTrace(ledger).defersAutoPurge, isTrue);
       });
     });
   });

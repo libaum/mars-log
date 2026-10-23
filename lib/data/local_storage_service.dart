@@ -1,4 +1,3 @@
-import 'dart:convert';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -19,24 +18,6 @@ class LocalStorageService {
   static const _keyUsageTrackingEnabled = 'usage_tracking_enabled';
   static const _keyDailyExportFolderUri = 'daily_export_folder_uri';
   static const _keyDailyExportFolderName = 'daily_export_folder_name';
-  // Sync keys come in two kinds, and the difference matters in Mars Hub,
-  // where every module shares one prefs file with mars_thoughts:
-  //
-  // - The relay URL belongs to the *device*: same name as mars_thoughts, so
-  //   Mars Hub pairs once and every module follows.
-  // - Watermarks and the purge trace belong to the *module*: prefixed, or
-  //   the modules would advance each other's watermarks and push each
-  //   other's tombstones. (On the phone the apps have separate prefs; the
-  //   prefix just costs nothing there.)
-  static const _keySyncServerUrl = 'sync_server_url';
-  static const _keySyncPaired = 'log_sync_paired';
-  static const _keySyncPurged = 'log_sync_purged';
-  static const _keySyncLastSyncedAt = 'log_sync_last_synced_at';
-  static const _keySyncLastSeenSeq = 'log_sync_last_seen_seq';
-  static const _keySyncFormat = 'log_sync_format';
-  // Value keeps the old "hub" name: paired devices already store it
-  // (docs/adr/0001-relay-rename-keeps-hub-id-on-the-wire.md at the Mars root).
-  static const _keySyncLastSeenRelayId = 'log_sync_last_seen_hub_id';
 
   final SharedPreferences _prefs;
 
@@ -141,109 +122,4 @@ class LocalStorageService {
   Future<void> setDailyExportFolderName(String? v) => v == null
       ? _prefs.remove(_keyDailyExportFolderName)
       : _prefs.setString(_keyDailyExportFolderName, v);
-
-  // ── Sync ─────────────────────────────────────────────────────────────────
-
-  /// Purged entries whose tombstone hasn't been pushed yet. Once an entry is
-  /// purged it is gone from the index, so this is the only trace the sync
-  /// layer has left to tell other devices to drop their copy. Pruned after
-  /// a successful push.
-  Map<String, PurgeMark> getSyncPurged() {
-    final json = _prefs.getString(_keySyncPurged);
-    if (json == null) return {};
-    try {
-      final map = jsonDecode(json) as Map<String, dynamic>;
-      return map.map((id, v) {
-        DateTime at(Object? ms) => DateTime.fromMillisecondsSinceEpoch(ms as int);
-        // A bare number is the one-time format from before stamp and
-        // recording time were split.
-        return MapEntry(
-          id,
-          v is List
-              ? PurgeMark(stamp: at(v[0]), recorded: at(v[1]))
-              : PurgeMark(stamp: at(v), recorded: at(v)),
-        );
-      });
-    } catch (_) {
-      return {};
-    }
-  }
-
-  Future<void> setSyncPurged(Map<String, PurgeMark> purged) async {
-    final json = jsonEncode(purged.map((id, m) => MapEntry(id, [
-          m.stamp.millisecondsSinceEpoch,
-          m.recorded.millisecondsSinceEpoch,
-        ])));
-    await _prefs.setString(_keySyncPurged, json);
-  }
-
-  String? getSyncServerUrl() => _prefs.getString(_keySyncServerUrl);
-
-  Future<void> setSyncServerUrl(String? url) async {
-    if (url == null) {
-      await _prefs.remove(_keySyncServerUrl);
-    } else {
-      await _prefs.setString(_keySyncServerUrl, url);
-    }
-  }
-
-  /// Whether the last pairing rebuild found URL, device token and key all
-  /// present — mirrored here because those secrets are only readable async,
-  /// and the journal decides on its 30-day purge synchronously at load.
-  /// Null on a device that hasn't run a rebuild since this flag existed.
-  bool? getSyncPaired() => _prefs.getBool(_keySyncPaired);
-
-  Future<void> setSyncPaired(bool paired) => _prefs.setBool(_keySyncPaired, paired);
-
-  DateTime? getSyncLastSyncedAt() {
-    final ms = _prefs.getInt(_keySyncLastSyncedAt);
-    return ms == null ? null : DateTime.fromMillisecondsSinceEpoch(ms);
-  }
-
-  Future<void> setSyncLastSyncedAt(DateTime? at) async {
-    if (at == null) {
-      await _prefs.remove(_keySyncLastSyncedAt);
-    } else {
-      await _prefs.setInt(_keySyncLastSyncedAt, at.millisecondsSinceEpoch);
-    }
-  }
-
-  /// The sync format this device's journal has been migrated to — see
-  /// [JournalSyncRepository.syncFormat]. Unset: never migrated.
-  int getSyncFormat() => _prefs.getInt(_keySyncFormat) ?? 1;
-
-  Future<void> setSyncFormat(int format) => _prefs.setInt(_keySyncFormat, format);
-
-  /// Relay sequence number up to which this device has pulled, and which relay
-  /// instance that number belongs to. Independent of [getSyncLastSyncedAt],
-  /// which is the *push* watermark on the local clock.
-  int? getSyncLastSeenSeq() => _prefs.getInt(_keySyncLastSeenSeq);
-
-  String? getSyncLastSeenRelayId() => _prefs.getString(_keySyncLastSeenRelayId);
-
-  Future<void> setSyncPullWatermark({
-    required int? seq,
-    required String? relayId,
-  }) async {
-    if (seq == null || relayId == null) {
-      await _prefs.remove(_keySyncLastSeenSeq);
-      await _prefs.remove(_keySyncLastSeenRelayId);
-    } else {
-      await _prefs.setInt(_keySyncLastSeenSeq, seq);
-      await _prefs.setString(_keySyncLastSeenRelayId, relayId);
-    }
-  }
-}
-
-/// A purge waiting to be pushed as a tombstone.
-///
-/// [stamp] is the time the tombstone competes with in last-write-wins;
-/// [recorded] is when this device made it. They differ for the automatic
-/// 30-day purge, whose stamp lies in the past on purpose. The push watermark
-/// is compared against [recorded] — against [stamp], such a tombstone would
-/// sit behind the watermark from birth and never be pushed.
-class PurgeMark {
-  final DateTime stamp;
-  final DateTime recorded;
-  const PurgeMark({required this.stamp, required this.recorded});
 }

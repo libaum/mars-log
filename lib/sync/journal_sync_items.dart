@@ -1,13 +1,13 @@
 import 'dart:convert';
 
 import 'package:mars_log/data/journal_repository.dart';
-import 'package:mars_log/data/local_storage_service.dart';
 import 'package:mars_log/data/usage_repository.dart';
 import 'package:mars_log/domain/insight.dart';
 import 'package:mars_log/domain/journal_entry.dart';
 import 'package:mars_log/domain/people_aliases.dart';
 import 'package:mars_log/domain/usage_day.dart';
 import 'package:mars_sync/mars_sync.dart';
+import 'package:mars_sync_flutter/mars_sync_flutter.dart';
 
 /// Maps journal entries onto mars_sync's generic [SyncItem]s.
 ///
@@ -18,19 +18,18 @@ import 'package:mars_sync/mars_sync.dart';
 ///
 /// Moving to the trash is an ordinary edit and syncs like one. A *purge* —
 /// manual, or the 30-day trash retention — is the only thing that becomes a
-/// tombstone; [SyncPurgeTrace] records it, this class pushes it.
+/// tombstone; [SyncPurgeTrace] records it in the [SyncLedger], which pushes
+/// it for the entry and its analysis ([tombstoneIds]).
 ///
 /// Phone usage rides along: one item per day (`usage:2026-10-21`) and one
 /// for the app labels ([kUsageAppsId]). Written only on the phone, merged
 /// as sets wherever they land, never deleted.
-class JournalSyncRepository implements SyncRepository {
+class JournalSyncItems extends ModuleItems {
   static const _moduleId = 'mars_log';
 
   /// 2: the analysis is its own item (`<id>:analysis`) with its own clock,
   /// entry items carry `v: 2`. Items written before (2026-09-26) carried the
-  /// analysis inside the entry, and the relay still holds one for every entry
-  /// not edited since. The first round of a build that knows this format
-  /// migrates the journal and pushes everything once, which replaces them.
+  /// analysis inside the entry; every device has migrated since.
   static const syncFormat = 2;
 
   /// The relay refuses a payload over 256 KB — and with it the whole push.
@@ -38,18 +37,15 @@ class JournalSyncRepository implements SyncRepository {
   static const maxUsagePayloadChars = 170 * 1024;
 
   final JournalRepository _journal;
-  final LocalStorageService _storage;
   final UsageRepository? _usage;
   final String _deviceId;
 
   /// [usage]: null leaves usage items out both ways.
-  JournalSyncRepository({
+  JournalSyncItems({
     required JournalRepository journal,
-    required LocalStorageService storage,
     required String deviceId,
     UsageRepository? usage,
   })  : _journal = journal,
-        _storage = storage,
         _usage = usage,
         _deviceId = deviceId;
 
@@ -57,21 +53,7 @@ class JournalSyncRepository implements SyncRepository {
   String get moduleId => _moduleId;
 
   @override
-  Future<List<SyncItem>> localChangesSince(DateTime? since) async {
-    if (_storage.getSyncFormat() < syncFormat) {
-      // Only a device that synced before can have left old items on the
-      // relay; a fresh one pushes everything in the current format anyway.
-      if (_storage.getSyncLastSyncedAt() != null ||
-          await pullWatermark() != null) {
-        await _journal.advanceClocksForFormatMigration();
-        // Push everything: the moved clocks are older than the watermark. If
-        // this round fails, the cleared watermark makes the next one do it.
-        await _storage.setSyncLastSyncedAt(null);
-        since = null;
-      }
-      await _storage.setSyncFormat(syncFormat);
-    }
-
+  Future<List<SyncItem>> itemsSince(DateTime? since) async {
     final items = <SyncItem>[];
 
     for (final entry in _journal.allEntries) {
@@ -178,31 +160,11 @@ class JournalSyncRepository implements SyncRepository {
       }
     }
 
-    for (final MapEntry(key: id, value: mark) in _storage.getSyncPurged().entries) {
-      // Filtered by when it was recorded, but competing with its stamp —
-      // see PurgeMark.
-      if (since != null && mark.recorded.isBefore(since)) continue;
-      // Both items go: the entry's and its analysis'. The analysis tombstone
-      // only clears the relay's copy; devices drop the analysis with the entry.
-      for (final itemId in [id, '$id$kAnalysisItemSuffix']) {
-        items.add(
-          SyncItem(
-            itemId: itemId,
-            moduleId: _moduleId,
-            deviceId: _deviceId,
-            updatedAt: mark.stamp,
-            deletedAt: mark.stamp,
-            payload: const {},
-          ),
-        );
-      }
-    }
-
     return items;
   }
 
   @override
-  Future<void> applyRemoteItems(List<SyncItem> items) async {
+  Future<void> apply(List<SyncItem> items) async {
     final upserts = <JournalEntry>[];
     final removed = <String, DateTime>{};
     final analyses = <SyncedAnalysis>[];
@@ -285,33 +247,16 @@ class JournalSyncRepository implements SyncRepository {
     }
   }
 
+  /// The analysis tombstone only clears the relay's copy; devices drop the
+  /// analysis with the entry.
   @override
-  Future<DateTime?> lastSyncedAt() async => _storage.getSyncLastSyncedAt();
+  Iterable<String> tombstoneIds(String purgedId) =>
+      [purgedId, '$purgedId$kAnalysisItemSuffix'];
 
+  /// The round is complete: this device now holds everything the relay had,
+  /// including a restore made elsewhere on day 29. Only now may the 30-day
+  /// purge delete audio. Its tombstones are recorded after the watermark, so
+  /// they go out with the next round.
   @override
-  Future<void> setLastSyncedAt(DateTime time) async {
-    await _storage.setSyncLastSyncedAt(time);
-    // Everything purged before this watermark has been pushed — forget it.
-    // Entries sharing its exact millisecond go once more next round.
-    final purged = _storage.getSyncPurged()
-      ..removeWhere((_, mark) => mark.recorded.isBefore(time));
-    await _storage.setSyncPurged(purged);
-    // The round is complete: this device now holds everything the relay had,
-    // including a restore made elsewhere on day 29. Only now may the 30-day
-    // purge delete audio. Its tombstones are recorded after [time], so they
-    // survive the pruning above and go out with the next round.
-    await _journal.purgeExpired();
-  }
-
-  @override
-  Future<PullWatermark?> pullWatermark() async {
-    final seq = _storage.getSyncLastSeenSeq();
-    final relayId = _storage.getSyncLastSeenRelayId();
-    if (seq == null || relayId == null) return null;
-    return PullWatermark(relayId: relayId, seq: seq);
-  }
-
-  @override
-  Future<void> setPullWatermark(PullWatermark watermark) =>
-      _storage.setSyncPullWatermark(seq: watermark.seq, relayId: watermark.relayId);
+  Future<void> afterRound() => _journal.purgeExpired();
 }

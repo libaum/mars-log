@@ -106,7 +106,7 @@ class JournalEntry {
   // analysis silently undo an edit made meanwhile on the other device. So
   // the analysis-owned fields — summary, moodLabel, moodScore, dimensions,
   // tags, analysisModel/Version and the three below — sync as a second item
-  // (`<id>:analysis`, see JournalSyncRepository) with its own clock.
+  // (`<id>:analysis`, see JournalSyncItems) with its own clock.
   //
   // A summary or tags edited by hand are the human's: [summaryByHand] /
   // [tagsByHand] move them into the entry item, and no analysis overwrites
@@ -249,7 +249,7 @@ class JournalEntry {
 
   /// The entry sync item: everything but the analysis ([kAnalysisKeys]) —
   /// except a summary / tags edited by hand, which are the human's.
-  /// `v: 2` is the sync format ([JournalSyncRepository.syncFormat]); items
+  /// `v: 2` is the sync format ([JournalSyncItems.syncFormat]); items
   /// from before the split carried the analysis inside and had none.
   Map<String, dynamic> toEntryItemJson() {
     final json = toJson()..removeWhere((k, _) => kAnalysisKeys.contains(k));
