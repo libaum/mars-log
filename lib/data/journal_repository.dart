@@ -181,9 +181,7 @@ class JournalRepository {
       // own. It gets the entry's creation — the stamp it has always synced
       // with, so no device sees a different winner. Stored with the next write.
       for (final e in _entries) {
-        final hasAnalysis =
-            (e.summary ?? '').isNotEmpty || e.moodScore != null || e.tags.isNotEmpty;
-        if (e.analysisChangedAt == null && hasAnalysis) {
+        if (e.analysisChangedAt == null && _hasAnalysis(e)) {
           e.analysisChangedAt = e.createdAt;
         }
       }
@@ -480,14 +478,19 @@ class JournalRepository {
       if (_entries.every((e) => e.id != entry.id)) {
         // Stamped now, not with the stamp from the zip: importing *is* a
         // local change, and an old stamp would sit behind the sync
-        // watermark and never be pushed.
+        // watermark and never be pushed. Same for its analysis, which syncs
+        // as an item of its own.
         _stamp(entry);
+        if (_hasAnalysis(entry)) entry.analysisChangedAt = entry.changedAt;
         _entries.add(entry);
       }
     }
     _sort();
     await _persist();
   }
+
+  static bool _hasAnalysis(JournalEntry e) =>
+      (e.summary ?? '').isNotEmpty || e.moodScore != null || e.tags.isNotEmpty;
 
   /// Every entry, trashed included — what the sync layer walks.
   List<JournalEntry> get allEntries => List.unmodifiable(_entries);

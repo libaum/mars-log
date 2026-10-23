@@ -305,6 +305,21 @@ void main() {
       expect((await onRelay('a'))['transcript'], 'neu');
     });
 
+    test('an entry imported from an old export sends its analysis too', () async {
+      await seedLegacyPhone([]);
+      phone.prefs['log_sync_format'] = 2; // migrated already, like every device now
+      await phone.run((journal, _) => journal.mergeAll([legacy('z')]));
+      await phone.sync(relay, key);
+
+      expect(relay.row('z'), isNotNull);
+      expect(relay.row('z$kAnalysisItemSuffix'), isNotNull,
+          reason: 'its old clock would sit behind the watermark');
+      await laptop.sync(relay, key);
+      await laptop.run((journal, _) async {
+        expect(journal.byId('z')!.summary, 'alte Analyse');
+      });
+    });
+
     test('a device that never synced shifts no clocks', () async {
       await phone.dir.create(recursive: true);
       await File('${phone.dir.path}/entries.json')
